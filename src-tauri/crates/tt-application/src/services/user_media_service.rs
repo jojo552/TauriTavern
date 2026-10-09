@@ -12,6 +12,10 @@ use tt_domain::models::filename::sanitize_filename;
 use tt_ports::user_media::UserMediaStoreError;
 pub use tt_ports::user_media::{UserMediaEntry, UserMediaStore};
 
+#[path = "user_media_service/user_files.rs"]
+mod user_files;
+pub use user_files::UserFileUploadResult;
+
 const MEDIA_EXTENSIONS: &[&str] = &[
     "bmp", "png", "jpg", "webp", "jpeg", "jfif", "gif", "mp4", "avi", "mov", "wmv", "flv", "webm",
     "3gp", "mkv", "mpg", "mp3", "wav", "ogg", "flac", "aac", "m4a", "aiff",
@@ -286,6 +290,34 @@ mod tests {
 
     #[async_trait]
     impl UserMediaStore for FakeStore {
+        async fn write_user_file(
+            &self,
+            relative_path: &Path,
+            bytes: Vec<u8>,
+        ) -> Result<(), DomainError> {
+            self.writes
+                .lock()
+                .expect("writes lock")
+                .push((relative_path.to_owned(), bytes));
+            Ok(())
+        }
+
+        async fn delete_user_file(&self, relative_path: &Path) -> Result<(), DomainError> {
+            self.deleted
+                .lock()
+                .expect("deleted lock")
+                .push(relative_path.to_owned());
+            Ok(())
+        }
+
+        async fn user_file_exists(&self, relative_path: &Path) -> Result<bool, DomainError> {
+            Ok(self.writes
+                .lock()
+                .expect("writes lock")
+                .iter()
+                .any(|(path, _)| path == relative_path))
+        }
+
         async fn write_file(
             &self,
             relative_path: &Path,
@@ -320,6 +352,36 @@ mod tests {
                 .push(relative_path.to_path_buf());
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn user_files_preserve_attachment_contract_and_reject_invalid_uploads() {
+        let store = Arc::new(FakeStore::default());
+        let service = UserMediaService::new(store.clone());
+        let result = service.upload_user_file(" notes.txt ", &BASE64_STANDARD.encode(b"old")).await.expect("upload");
+        assert_eq!(result.path, "/user/files/notes.txt");
+        assert!(service.upload_user_file("notes.txt", "not base64!").await.is_err());
+        assert!(service.upload_user_file("payload.JS", "").await.is_err());
+        assert!(service.upload_user_file("../notes.txt", "").await.is_err());
+        assert_eq!(*store.writes.lock().expect("writes lock"), vec![(PathBuf::from("notes.txt"), b"old".to_vec())]);
+
+        let urls = [
+            "/user/files/notes.txt",
+            "https://host.invalid/user/files/notes.txt?download=1#fragment",
+            "user\\files\\notes.txt",
+            "/user/files/missing.txt",
+            "/user/images/notes.txt",
+            "/user/files/../private.txt",
+            "",
+        ].map(str::to_owned).to_vec();
+        let verified = service.verify_user_files(urls.clone()).await.expect("verify");
+        assert_eq!(verified.len(), 4);
+        for url in &urls[..3] {
+            assert_eq!(verified.get(url), Some(&true));
+        }
+        assert_eq!(verified.get(&urls[3]), Some(&false));
+        service.delete_user_file(&urls[1]).await.expect("delete URL");
+        assert_eq!(*store.deleted.lock().expect("deleted lock"), vec![PathBuf::from("notes.txt")]);
     }
 
     #[tokio::test]

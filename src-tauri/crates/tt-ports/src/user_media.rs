@@ -37,6 +37,14 @@ impl From<UserMediaStoreError> for DomainError {
 
 #[async_trait]
 pub trait UserMediaStore: Send + Sync {
+    /// Publish attachment bytes without damaging an existing file on failure.
+    async fn write_user_file(&self, relative_path: &Path, bytes: Vec<u8>) -> Result<(), DomainError>;
+
+    async fn delete_user_file(&self, relative_path: &Path) -> Result<(), DomainError>;
+
+    /// InvalidData denotes a reference rejected by filesystem confinement.
+    async fn user_file_exists(&self, relative_path: &Path) -> Result<bool, DomainError>;
+
     async fn write_file(
         &self,
         relative_path: &Path,

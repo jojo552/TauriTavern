@@ -14,6 +14,8 @@ export type SettingsTranslate = (key: string) => string;
 export type SettingsCapabilities = {
     requestProxyAllowed: boolean;
     lanSyncAllowed: boolean;
+    supportsBackendLogs: boolean;
+    supportsLlmApiLogs: boolean;
     supportsCloseToTrayOnClose: boolean;
     supportsDataRootSelection: boolean;
 };
@@ -241,6 +243,19 @@ export function validateSettingsBoundary(
         || !options.viewModel.capabilities
         || !options.viewModel.values) {
         throw new Error('TauriTavern settings view model is required');
+    }
+    const capabilities = options.viewModel.capabilities;
+    for (const name of [
+        'requestProxyAllowed',
+        'lanSyncAllowed',
+        'supportsBackendLogs',
+        'supportsLlmApiLogs',
+        'supportsCloseToTrayOnClose',
+        'supportsDataRootSelection',
+    ]) {
+        if (!plainObject(capabilities) || typeof capabilities[name] !== 'boolean') {
+            throw new Error(`TauriTavern settings capability is unavailable: ${name}`);
+        }
     }
     if (typeof options.tr !== 'function') {
         throw new Error('TauriTavern settings translator is required');

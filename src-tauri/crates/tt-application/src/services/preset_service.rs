@@ -1,4 +1,8 @@
 use std::sync::Arc;
+
+use crate::dto::preset_dto::SavePresetResponseDto;
+use crate::errors::ApplicationError;
+use crate::services::skill_service::SkillService;
 use tt_domain::errors::DomainError;
 use tt_domain::models::preset::{DefaultPreset, Preset, PresetType};
 use tt_ports::repositories::preset_repository::PresetRepository;
@@ -39,7 +43,19 @@ impl PresetService {
         Ok(())
     }
 
-    /// Delete a preset
+    /// Create and persist a preset supplied by a command.
+    pub async fn save_preset_data(
+        &self,
+        name: String,
+        api_id: &str,
+        data: serde_json::Value,
+    ) -> Result<SavePresetResponseDto, DomainError> {
+        let preset = self.create_preset(name, api_id, data)?;
+        self.save_preset(&preset).await?;
+        Ok(SavePresetResponseDto::new(preset.name))
+    }
+
+    /// Delete a preset and its linked skills. Cleanup failure is returned after deletion commits.
     ///
     /// # Arguments
     ///
@@ -48,20 +64,29 @@ impl PresetService {
     ///
     /// # Returns
     ///
-    /// * `Result<(), DomainError>` - Success or error
+    /// * `Result<(), ApplicationError>` - Success or deletion/linked-skill error
     pub async fn delete_preset(
         &self,
         name: &str,
         preset_type: &PresetType,
-    ) -> Result<(), DomainError> {
+        skill_service: &SkillService,
+    ) -> Result<(), ApplicationError> {
         tracing::debug!("Deleting preset: {} (type: {})", name, preset_type);
+        if name.trim().is_empty() {
+            return Err(ApplicationError::ValidationError(
+                "Preset name cannot be empty".to_string(),
+            ));
+        }
 
         if !self
             .preset_repository
             .preset_exists(name, preset_type)
             .await?
         {
-            return Err(DomainError::NotFound(format!("Preset not found: {}", name)));
+            return Err(ApplicationError::NotFound(format!(
+                "Preset not found: {}",
+                name
+            )));
         }
 
         // Delete the preset
@@ -69,6 +94,28 @@ impl PresetService {
             .delete_preset(name, preset_type)
             .await?;
 
+        let deleted_skills = skill_service
+            .delete_skills_for_source(
+                "preset",
+                &format!("preset:{}:{}", preset_type.to_api_id().trim(), name.trim()),
+            )
+            .await
+            .inspect_err(|error| {
+                tracing::error!(
+                    target: tt_contracts::observability::USER_VISIBLE_ERROR,
+                    "Deleted preset '{}' but could not delete its linked Agent Skills: {}",
+                    name,
+                    error
+                );
+            })?;
+        if !deleted_skills.is_empty() {
+            tracing::debug!(
+                "Deleted {} Agent Skill(s) linked to preset '{}': {}",
+                deleted_skills.len(),
+                name,
+                deleted_skills.join(", ")
+            );
+        }
         tracing::debug!("Preset deleted successfully: {}", name);
         Ok(())
     }

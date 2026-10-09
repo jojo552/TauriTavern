@@ -15,7 +15,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -141,8 +141,7 @@ impl PageBus {
         Ok(PageChannel {
             id,
             bus: self.clone(),
-            next_sequence: AtomicU64::new(0),
-            ended: AtomicBool::new(false),
+            state: Mutex::new(ChannelState::default()),
         })
     }
 
@@ -236,24 +235,34 @@ impl std::fmt::Display for ChannelClosed {
     }
 }
 
+#[derive(Default)]
+struct ChannelState {
+    next_sequence: u64,
+    ended: bool,
+}
+
+/// A channel may be shared by concurrent tasks (extension tool calls and their cancellations).
+/// Its sequence number and its place in the page stream are assigned under one lock, so the page
+/// always receives sequences in order and `channel-end` after every data frame.
 pub struct PageChannel {
     id: String,
     bus: Arc<PageBus>,
-    next_sequence: AtomicU64,
-    ended: AtomicBool,
+    state: Mutex<ChannelState>,
 }
 
 impl PageChannel {
     pub fn send(&self, payload: impl Serialize) -> Result<(), ChannelClosed> {
-        if self.ended.load(Ordering::SeqCst) {
-            return Err(ChannelClosed);
-        }
         let payload = serde_json::to_value(payload).map_err(|error| {
             tracing::error!(%error, channel = %self.id, "Failed to serialize a page channel payload");
             ChannelClosed
         })?;
-        let sequence = self.next_sequence.fetch_add(1, Ordering::SeqCst);
-        self.bus.push(json!({ "type": "channel", "channelId": self.id, "sequence": sequence, "payload": payload }))
+        let mut state = self.state.lock().expect("page channel poisoned");
+        if state.ended {
+            return Err(ChannelClosed);
+        }
+        self.bus.push(json!({ "type": "channel", "channelId": self.id, "sequence": state.next_sequence, "payload": payload }))?;
+        state.next_sequence += 1;
+        Ok(())
     }
 
     pub fn closed(&self) -> CancellationToken {
@@ -262,7 +271,9 @@ impl PageChannel {
 
     /// Tells the page this channel is finished; later sends fail.
     pub fn end(&self) {
-        if !self.ended.swap(true, Ordering::SeqCst) {
+        let mut state = self.state.lock().expect("page channel poisoned");
+        if !state.ended {
+            state.ended = true;
             let _ = self
                 .bus
                 .push(json!({ "type": "channel-end", "channelId": self.id }));
@@ -309,6 +320,42 @@ mod tests {
             frames.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![0, 1, 2]
         );
+    }
+
+    /// Extension tools share one channel across concurrent calls. Whatever the interleaving, the
+    /// page stream must carry that channel's sequences in order, or the page fails its transport.
+    #[test]
+    fn concurrent_senders_keep_channel_sequences_in_stream_order() {
+        const SENDERS: usize = 8;
+        const PER_SENDER: usize = 200;
+        let bus = Arc::new(PageBus::default());
+        let mut stream = bus.attach(None).unwrap();
+        let channel = Arc::new(
+            bus.channel(&json!({ "channel": { "$channel": "tools" } }), "channel")
+                .unwrap(),
+        );
+        let start = Arc::new(std::sync::Barrier::new(SENDERS));
+        let senders: Vec<_> = (0..SENDERS)
+            .map(|_| {
+                let (channel, start) = (channel.clone(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    for _ in 0..PER_SENDER {
+                        channel.send(json!(null)).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for sender in senders {
+            sender.join().unwrap();
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let sequences: Vec<u64> = runtime
+            .block_on(frames(&mut stream, SENDERS * PER_SENDER))
+            .iter()
+            .map(|(_, frame)| frame["sequence"].as_u64().unwrap())
+            .collect();
+        assert_eq!(sequences, (0..(SENDERS * PER_SENDER) as u64).collect::<Vec<_>>());
     }
 
     /// A dropped connection resumes from the page's last received frame: nothing it saw is

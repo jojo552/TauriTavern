@@ -4,18 +4,21 @@ use std::time::UNIX_EPOCH;
 use async_trait::async_trait;
 use tokio::fs;
 
+use tt_domain::errors::DomainError;
 use tt_domain::models::user_directory::UserDirectory;
 use tt_ports::user_media::{UserMediaEntry, UserMediaStore, UserMediaStoreError};
 
 #[derive(Debug, Clone)]
 pub struct FilesystemUserMediaStore {
     user_images_dir: PathBuf,
+    user_files: crate::user_files::FilesystemUserFiles,
 }
 
 impl FilesystemUserMediaStore {
     pub fn from_data_root(data_root: impl AsRef<Path>) -> Self {
         Self {
             user_images_dir: UserDirectory::default_user(data_root.as_ref()).user_images,
+            user_files: crate::user_files::FilesystemUserFiles::new(data_root.as_ref()),
         }
     }
 
@@ -26,6 +29,22 @@ impl FilesystemUserMediaStore {
 
 #[async_trait]
 impl UserMediaStore for FilesystemUserMediaStore {
+    async fn write_user_file(
+        &self,
+        relative_path: &Path,
+        bytes: Vec<u8>,
+    ) -> Result<(), DomainError> {
+        self.user_files.write(relative_path, &bytes).await
+    }
+
+    async fn delete_user_file(&self, relative_path: &Path) -> Result<(), DomainError> {
+        self.user_files.delete(relative_path).await
+    }
+
+    async fn user_file_exists(&self, relative_path: &Path) -> Result<bool, DomainError> {
+        self.user_files.exists(relative_path).await
+    }
+
     async fn write_file(
         &self,
         relative_path: &Path,

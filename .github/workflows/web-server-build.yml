@@ -38,7 +38,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -51,6 +51,18 @@ jobs:
           install: false
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Record Rust formatting corrections
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all
+          git diff -- src-tauri > rustfmt.patch
+
+      - name: Upload formatting review
+        uses: actions/upload-artifact@v7
+        with:
+          name: rustfmt-review
+          path: rustfmt.patch
+          retention-days: 1
 
       - name: Run checks and tests
         run: pnpm run check

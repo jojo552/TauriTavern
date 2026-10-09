@@ -1,9 +1,13 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use tt_ports::byte_reader::ByteReader;
 
 use serde_json::Value;
 
+use crate::dto::agent_dto::{
+    AgentPruneChatPersistentStatesDto, AgentPruneChatPersistentStatesResultDto,
+};
 use crate::dto::chat_dto::{
     AddMessageDto, ChatDto, ChatSearchResultDto, CreateChatDto, ImportCharacterChatsDto,
     ImportChatDto, RenameChatDto, RestoreCharacterChatBackupDto,
@@ -18,10 +22,9 @@ use crate::services::chat_file_validation::{
 };
 use crate::services::chat_history_coordinator::ChatHistoryCoordinator;
 use tt_domain::errors::DomainError;
+use tt_domain::models::agent::AgentChatRef;
 use tt_domain::models::chat::{Chat, ChatMessage, MessageExtra};
-use tt_ports::repositories::agent_workspace_lifecycle_repository::{
-    AgentPersistentStatePrune, AgentPersistentStatePruneRequest,
-};
+use tt_ports::repositories::agent_workspace_lifecycle_repository::AgentPersistentStatePruneRequest;
 use tt_ports::repositories::character_repository::CharacterRepository;
 use tt_ports::repositories::chat_repository::{
     ChatBackupCatalogEntry, ChatImportFormat, ChatRepository,
@@ -596,14 +599,47 @@ impl ChatService {
             .map_err(Into::into)
     }
 
+    /// Prune only explicit candidates, retaining references from the persisted chat and its swipes.
     pub async fn prune_agent_persistent_states(
         &self,
-        target: &AgentChatWorkspaceTarget,
-        request: AgentPersistentStatePruneRequest,
-    ) -> Result<AgentPersistentStatePrune, ApplicationError> {
-        self.agent_workspace_lifecycle_service
-            .prune_persistent_states(target, request)
-            .await
+        dto: AgentPruneChatPersistentStatesDto,
+    ) -> Result<AgentPruneChatPersistentStatesResultDto, ApplicationError> {
+        let (character_id, file_name) = match &dto.chat_ref {
+            AgentChatRef::Character {
+                character_id,
+                file_name,
+            } => (character_id.as_str(), file_name.as_str()),
+            AgentChatRef::Group { .. } => {
+                return Err(ApplicationError::ValidationError(
+                    "agent.group_persistent_state_prune_unsupported".to_string(),
+                ));
+            }
+        };
+        let candidate_state_ids = dto.candidate_state_ids.ok_or_else(|| {
+            ApplicationError::ValidationError(
+                "agent.persistent_state_prune_candidates_required".to_string(),
+            )
+        })?;
+        let payload = self.get_chat_payload(character_id, file_name).await?;
+        let retained_state_ids = collect_agent_persistent_state_ids(&payload);
+        let target = AgentChatWorkspaceTarget {
+            chat_ref: dto.chat_ref,
+            stable_chat_id: dto.stable_chat_id,
+        };
+        let prune = self
+            .agent_workspace_lifecycle_service
+            .prune_persistent_states(
+                &target,
+                AgentPersistentStatePruneRequest {
+                    retained_state_ids,
+                    candidate_state_ids,
+                },
+            )
+            .await?;
+        Ok(AgentPruneChatPersistentStatesResultDto {
+            workspace_id: prune.workspace_id,
+            removed_state_ids: prune.removed_state_ids,
+        })
     }
 
     pub async fn copy_agent_persistent_states(
@@ -746,9 +782,76 @@ impl ChatService {
     }
 }
 
+fn collect_agent_persistent_state_ids(payload: &[Value]) -> Vec<String> {
+    let mut retained = BTreeSet::new();
+    for item in payload {
+        collect_agent_persistent_state_id_from_extra(item.get("extra"), &mut retained);
+        if let Some(swipe_info) = item.get("swipe_info").and_then(Value::as_array) {
+            for swipe in swipe_info {
+                collect_agent_persistent_state_id_from_extra(swipe.get("extra"), &mut retained);
+            }
+        }
+    }
+    retained.into_iter().collect()
+}
+
+fn collect_agent_persistent_state_id_from_extra(
+    extra: Option<&Value>,
+    retained: &mut BTreeSet<String>,
+) {
+    let Some(state_id) = extra
+        .and_then(|value| value.get("tauritavern"))
+        .and_then(|value| value.get("agent"))
+        .and_then(|value| value.get("persistStateId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    retained.insert(state_id.to_string());
+}
+
 fn character_locator(character_id: &str, file_name: &str) -> ChatHistoryLocator {
     ChatHistoryLocator::Character {
         character_id: character_id.to_string(),
         file_name: file_name.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::collect_agent_persistent_state_ids;
+
+    #[test]
+    fn persistent_state_retention_includes_all_message_and_swipe_references() {
+        let payload = vec![
+            json!({"chat_metadata": {"tauritavern": {"agent": {"persistStateId": "metadata"}}}}),
+            json!({
+                "extra": {"tauritavern": {"agent": {"persistStateId": " state_current "}}},
+                "swipe_info": [
+                    {"extra": {"tauritavern": {"agent": {"persistStateId": "state_previous"}}}},
+                    {"extra": {"tauritavern": {"agent": {"persistStateId": "state_current"}}}},
+                    {"extra": {"tauritavern": {"agent": {"persistStateId": "   "}}}},
+                    {"extra": {"tauritavern": {"agent": {"persistStateId": 42}}}},
+                    null
+                ]
+            }),
+            json!({
+                "swipe_info": [
+                    {"extra": {"tauritavern": {"agent": {"persistStateId": " state_swipe_only "}}}}
+                ]
+            }),
+            json!({"extra": null, "swipe_info": {"extra": {"persistStateId": "not_a_swipe"}}}),
+            json!({"extra": {"persistStateId": "wrong_namespace"}}),
+            json!({"extra": {"tauritavern": {"agent": {"persistStateId": null}}}}),
+        ];
+
+        assert_eq!(
+            collect_agent_persistent_state_ids(&payload),
+            vec!["state_current", "state_previous", "state_swipe_only"]
+        );
     }
 }

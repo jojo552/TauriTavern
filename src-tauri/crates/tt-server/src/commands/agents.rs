@@ -5,22 +5,17 @@
 //! response shape. `subscribe_agent_run_live_projection` needs a server-pushed channel and is
 //! deliberately not handled here.
 
-use std::collections::BTreeSet;
-
 use serde_json::Value;
 use tt_application::dto::agent_dto::{
     AgentApplyCurrentModelConnectionSnapshotDto, AgentApplyCurrentModelConnectionSnapshotResultDto,
     AgentBuildCurrentModelConnectionSnapshotDto, AgentBuildCurrentModelConnectionSnapshotResultDto,
     AgentCopyChatPersistentStatesDto, AgentListProfilesResultDto, AgentListToolsDto,
     AgentLoadProfileResultDto, AgentPreparePromptAssemblyDto, AgentProfileIdDto,
-    AgentPruneChatPersistentStatesDto, AgentPruneChatPersistentStatesResultDto,
     AgentRepairProfileFileDto, AgentResolveSystemPromptDto, AgentResolveSystemPromptResultDto,
     AgentRetargetPresetRefsDto, AgentRetargetPresetRefsResultDto, AgentSaveProfileDto,
 };
-use tt_application::errors::ApplicationError;
 use tt_application::services::agent_workspace_lifecycle_service::AgentChatWorkspaceTarget;
-use tt_domain::models::agent::{AgentChatRef, AgentInvocationExitPolicy};
-use tt_ports::repositories::agent_workspace_lifecycle_repository::AgentPersistentStatePruneRequest;
+use tt_domain::models::agent::AgentInvocationExitPolicy;
 use tt_runtime::CoreServices;
 
 use super::args::Args;
@@ -246,9 +241,11 @@ pub(super) async fn dispatch(
                     .await?,
             )
         }
-        "prune_agent_chat_persistent_states" => {
-            prune_chat_persistent_states(s, a.required("dto")?).await
-        }
+        "prune_agent_chat_persistent_states" => json(
+            s.chat_service
+                .prune_agent_persistent_states(a.required("dto")?)
+                .await?,
+        ),
 
         "list_agent_sessions" => json(runtime.list_sessions().await?),
         "create_agent_session" => json(runtime.create_session().await?),
@@ -262,77 +259,5 @@ pub(super) async fn dispatch(
         "prepare_agent_session_run" => json(runtime.prepare_session_run(a.required("dto")?).await?),
         "start_agent_session_run" => json(runtime.start_session_run(a.required("dto")?).await?),
         _ => Err(unsupported(command)),
-    }
-}
-
-/// Mirrors the native command: retain every state still referenced by the chat payload.
-async fn prune_chat_persistent_states(
-    s: &CoreServices,
-    dto: AgentPruneChatPersistentStatesDto,
-) -> Result<Value, CommandError> {
-    let (character_id, file_name) = match &dto.chat_ref {
-        AgentChatRef::Character {
-            character_id,
-            file_name,
-        } => (character_id.as_str(), file_name.as_str()),
-        AgentChatRef::Group { .. } => {
-            return Err(ApplicationError::ValidationError(
-                "agent.group_persistent_state_prune_unsupported".into(),
-            )
-            .into());
-        }
-    };
-    let candidate_state_ids = dto.candidate_state_ids.ok_or_else(|| {
-        ApplicationError::ValidationError("agent.persistent_state_prune_candidates_required".into())
-    })?;
-    let payload = s
-        .chat_service
-        .get_chat_payload(character_id, file_name)
-        .await?;
-    let retained_state_ids = collect_persistent_state_ids(&payload);
-    let target = AgentChatWorkspaceTarget {
-        chat_ref: dto.chat_ref,
-        stable_chat_id: dto.stable_chat_id,
-    };
-    let prune = s
-        .chat_service
-        .prune_agent_persistent_states(
-            &target,
-            AgentPersistentStatePruneRequest {
-                retained_state_ids,
-                candidate_state_ids,
-            },
-        )
-        .await?;
-    json(AgentPruneChatPersistentStatesResultDto {
-        workspace_id: prune.workspace_id,
-        removed_state_ids: prune.removed_state_ids,
-    })
-}
-
-fn collect_persistent_state_ids(payload: &[Value]) -> Vec<String> {
-    let mut retained = BTreeSet::new();
-    for item in payload {
-        collect_persistent_state_id(item.get("extra"), &mut retained);
-        for swipe in item
-            .get("swipe_info")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            collect_persistent_state_id(swipe.get("extra"), &mut retained);
-        }
-    }
-    retained.into_iter().collect()
-}
-
-fn collect_persistent_state_id(extra: Option<&Value>, retained: &mut BTreeSet<String>) {
-    let state_id = extra
-        .and_then(|value| value.pointer("/tauritavern/agent/persistStateId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(state_id) = state_id {
-        retained.insert(state_id.to_string());
     }
 }

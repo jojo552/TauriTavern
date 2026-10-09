@@ -33,12 +33,12 @@
 ### 2.2 Bootloader：分层 import + Android import 重试
 
 - `src/init.js`
-  - 设置：`window.__TAURI_RUNNING__ = true`，并计算 `globalThis.__TAURITAVERN_PERF_ENABLED__`
-  - 通过 `importWithRetry()` 依次加载：
+  - 原生宿主设置 `window.__TAURI_RUNNING__ = true`；browser/web 不伪造原生标记。两者计算 `globalThis.__TAURITAVERN_PERF_ENABLED__`
+  - 依次加载模块；原生宿主使用 `importWithRetry()`，浏览器 Host Kernel 直接 import，并先等待真实 session/SSE ready：
     1) `./lib.js`（静态依赖 `src/dist/lib.core.bundle.js`）
     2) `./tauri-main.js`（安装 Host Kernel：路由/拦截器/ABI）
     3) `./script.js`（SillyTavern 主前端）
-  - 目的：在 Android WebView 首启 I/O 抖动场景下提高模块加载确定性。
+  - 重试的目的仅是提高 Android WebView 首启 I/O 抖动时的模块加载确定性。任何早期模块或宿主就绪失败都显示共同的启动失败面板，移除 preloader、停止初始化，只提供手动重载，不静默继续。
 
 ### 2.3 Host Kernel：把同源 /api 变成可路由端点
 
@@ -103,7 +103,7 @@
 
 `/api/settings/get` 独立读取设置；`/api/bootstrap` 提供角色、群组、头像和密钥状态等启动元数据。前端并发获取，再按既有顺序应用；本次启动复用读取结果，避免重复请求。
 
-设置与角色是启动必需数据，失败会阻止启动；群组、头像或密钥状态失败时保留可见错误并仅禁用对应能力，不阻止 `APP_READY`。
+设置与 bootstrap 元数据都是启动必需数据；bootstrap 是完整快照，角色、群组、头像、密钥状态任一读取失败都会返回带域上下文的错误并停止启动，不把失败伪装成空数组或默认状态。两宿主使用相同错误规则；前端显示共同失败面板，不发出 `APP_READY`。成功快照仍按原顺序应用。
 
 ### 4.1 快速回复复用本次设置读取
 

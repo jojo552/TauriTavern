@@ -1,8 +1,5 @@
 use std::sync::Arc;
 
-use std::collections::BTreeSet;
-
-use serde_json::Value;
 use tauri::{State, ipc::Channel};
 
 use crate::app::AppState;
@@ -27,12 +24,9 @@ use tt_application::dto::agent_dto::{
     AgentStartRunDto, AgentSubmitGuidanceDto, AgentSubmitGuidanceResultDto,
     AgentSubscribeRunLiveProjectionDto, AgentTaskDetailDto, AgentWorkspaceFileDto,
 };
-use tt_application::errors::ApplicationError;
 use tt_application::services::agent_runtime_service::AgentRunLivePresenter;
 use tt_application::services::agent_workspace_lifecycle_service::AgentChatWorkspaceTarget;
-use tt_domain::models::agent::AgentChatRef;
 use tt_domain::models::agent::profile_diagnostic::AgentProfileHealth;
-use tt_ports::repositories::agent_workspace_lifecycle_repository::AgentPersistentStatePruneRequest;
 
 #[tauri::command]
 pub async fn start_agent_run(
@@ -589,58 +583,11 @@ pub async fn prune_agent_chat_persistent_states(
 ) -> Result<AgentPruneChatPersistentStatesResultDto, CommandError> {
     log_command("prune_agent_chat_persistent_states");
 
-    let (character_id, file_name) = match &dto.chat_ref {
-        AgentChatRef::Character {
-            character_id,
-            file_name,
-        } => (character_id.as_str(), file_name.as_str()),
-        AgentChatRef::Group { .. } => {
-            return Err(
-                map_command_error("Failed to prune agent persistent states")(
-                    ApplicationError::ValidationError(
-                        "agent.group_persistent_state_prune_unsupported".to_string(),
-                    ),
-                ),
-            );
-        }
-    };
-
-    let candidate_state_ids = dto.candidate_state_ids.ok_or_else(|| {
-        map_command_error("Failed to prune agent persistent states")(
-            ApplicationError::ValidationError(
-                "agent.persistent_state_prune_candidates_required".to_string(),
-            ),
-        )
-    })?;
-    let payload = app_state
-        .services
-        .chat_service
-        .get_chat_payload(character_id, file_name)
-        .await
-        .map_err(map_command_error(
-            "Failed to read chat payload for agent prune",
-        ))?;
-    let retained_state_ids = collect_agent_persistent_state_ids(&payload);
-    let target = AgentChatWorkspaceTarget {
-        chat_ref: dto.chat_ref,
-        stable_chat_id: dto.stable_chat_id,
-    };
-
     app_state
         .services
         .chat_service
-        .prune_agent_persistent_states(
-            &target,
-            AgentPersistentStatePruneRequest {
-                retained_state_ids,
-                candidate_state_ids,
-            },
-        )
+        .prune_agent_persistent_states(dto)
         .await
-        .map(|prune| AgentPruneChatPersistentStatesResultDto {
-            workspace_id: prune.workspace_id,
-            removed_state_ids: prune.removed_state_ids,
-        })
         .map_err(map_command_error("Failed to prune agent persistent states"))
 }
 
@@ -668,34 +615,4 @@ pub async fn copy_agent_chat_persistent_states(
         .map_err(map_command_error(
             "Failed to copy agent chat persistent states",
         ))
-}
-
-fn collect_agent_persistent_state_ids(payload: &[Value]) -> Vec<String> {
-    let mut retained = BTreeSet::new();
-    for item in payload {
-        collect_agent_persistent_state_id_from_extra(item.get("extra"), &mut retained);
-        if let Some(swipe_info) = item.get("swipe_info").and_then(Value::as_array) {
-            for swipe in swipe_info {
-                collect_agent_persistent_state_id_from_extra(swipe.get("extra"), &mut retained);
-            }
-        }
-    }
-    retained.into_iter().collect()
-}
-
-fn collect_agent_persistent_state_id_from_extra(
-    extra: Option<&Value>,
-    retained: &mut BTreeSet<String>,
-) {
-    let Some(state_id) = extra
-        .and_then(|value| value.get("tauritavern"))
-        .and_then(|value| value.get("agent"))
-        .and_then(|value| value.get("persistStateId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-    retained.insert(state_id.to_string());
 }

@@ -13,8 +13,6 @@ use tt_application::dto::preset_dto::{
 };
 use tt_domain::models::preset::PresetType;
 
-const SKILL_SOURCE_KIND_PRESET: &str = "preset";
-
 /// Save a preset
 #[tauri::command]
 pub async fn save_preset(
@@ -38,23 +36,12 @@ pub async fn save_preset(
         ));
     }
 
-    // Create preset from DTO
-    let preset = app_state
-        .services
-        .preset_service
-        .create_preset(dto.name.clone(), &dto.api_id, dto.preset)
-        .map_err(map_command_error("Failed to create preset"))?;
-
-    // Save preset
     app_state
         .services
         .preset_service
-        .save_preset(&preset)
+        .save_preset_data(dto.name, &dto.api_id, dto.preset)
         .await
-        .map_err(map_command_error("Failed to save preset"))?;
-
-    tracing::debug!("Preset saved successfully: {}", preset.name);
-    Ok(SavePresetResponseDto::new(preset.name))
+        .map_err(map_command_error("Failed to save preset"))
 }
 
 /// Delete a preset
@@ -76,35 +63,12 @@ pub async fn delete_preset(
     // Get preset type
     let preset_type = preset_type_from_api_id(&dto.api_id)?;
 
-    // Delete preset
     app_state
         .services
         .preset_service
-        .delete_preset(&dto.name, &preset_type)
+        .delete_preset(&dto.name, &preset_type, &app_state.services.skill_service)
         .await
-        .map_err(map_command_error("Failed to delete preset"))?;
-
-    let source_id = preset_skill_source_id(preset_type.to_api_id(), &dto.name);
-    let deleted_skills = app_state
-        .services
-        .skill_service
-        .delete_skills_for_source(SKILL_SOURCE_KIND_PRESET, &source_id)
-        .await
-        .map_err(map_command_error(format!(
-            "Failed to delete Agent Skills linked to preset '{}'",
-            dto.name
-        )))?;
-    if !deleted_skills.is_empty() {
-        tracing::debug!(
-            "Deleted {} Agent Skill(s) linked to preset '{}': {}",
-            deleted_skills.len(),
-            dto.name,
-            deleted_skills.join(", ")
-        );
-    }
-
-    tracing::debug!("Preset deleted successfully: {}", dto.name);
-    Ok(())
+        .map_err(map_command_error("Failed to delete preset"))
 }
 
 /// Restore a default preset
@@ -162,23 +126,12 @@ pub async fn save_openai_preset(
         ));
     }
 
-    // Create preset
-    let preset = app_state
-        .services
-        .preset_service
-        .create_preset(name.clone(), "openai", dto.preset)
-        .map_err(map_command_error("Failed to create OpenAI preset"))?;
-
-    // Save preset
     app_state
         .services
         .preset_service
-        .save_preset(&preset)
+        .save_preset_data(name, "openai", dto.preset)
         .await
-        .map_err(map_command_error("Failed to save OpenAI preset"))?;
-
-    tracing::debug!("OpenAI preset saved successfully: {}", preset.name);
-    Ok(SavePresetResponseDto::new(preset.name))
+        .map_err(map_command_error("Failed to save OpenAI preset"))
 }
 
 /// Delete an OpenAI preset (specialized endpoint)
@@ -197,32 +150,22 @@ pub async fn delete_openai_preset(
         ));
     }
 
-    // Delete preset
     match app_state
         .services
         .preset_service
-        .delete_preset(&dto.name, &PresetType::OpenAI)
+        .delete_preset(
+            &dto.name,
+            &PresetType::OpenAI,
+            &app_state.services.skill_service,
+        )
         .await
     {
-        Ok(()) => {
-            let source_id = preset_skill_source_id(PresetType::OpenAI.to_api_id(), &dto.name);
-            if let Err(e) = app_state
-                .services
-                .skill_service
-                .delete_skills_for_source(SKILL_SOURCE_KIND_PRESET, &source_id)
-                .await
-            {
-                log_user_visible_error(format!(
-                    "Failed to delete Agent Skills linked to OpenAI preset '{}': {}",
-                    dto.name, e
-                ));
-                return Ok(DeleteOpenAIPresetResponseDto::error());
-            }
-            tracing::debug!("OpenAI preset deleted successfully: {}", dto.name);
-            Ok(DeleteOpenAIPresetResponseDto::success())
-        }
-        Err(e) => {
-            log_user_visible_error(format!("Failed to delete OpenAI preset: {}", e));
+        Ok(()) => Ok(DeleteOpenAIPresetResponseDto::success()),
+        Err(error) => {
+            log_user_visible_error(format!(
+                "Failed to delete OpenAI preset or linked Agent Skills: {}",
+                error
+            ));
             Ok(DeleteOpenAIPresetResponseDto::error())
         }
     }
@@ -234,10 +177,6 @@ fn preset_type_from_api_id(api_id: &str) -> Result<PresetType, CommandError> {
         log_user_visible_error(&message);
         CommandError::BadRequest(message)
     })
-}
-
-fn preset_skill_source_id(api_id: &str, name: &str) -> String {
-    format!("preset:{}:{}", api_id.trim(), name.trim())
 }
 
 /// List presets of a specific type

@@ -1,6 +1,6 @@
 // @ts-check
 
-import { hostPlatform, isDesktopHost } from '../../../util/host-identity.js';
+import { hostPlatform, isDesktopHost, isWebHost } from '../../../util/host-identity.js';
 import {
     getChatBackupStorageStats,
     getRuntimePaths,
@@ -12,11 +12,14 @@ import { createDataRootState, createTauriTavernSettingsState } from './settings-
 
 export function resolveTauriTavernSettingsCapabilities() {
     const iosCaps = getActiveIosPolicyCapabilities();
+    const webHost = isWebHost();
     const supportsDataRootSelection = isDesktopHost();
 
     return {
         requestProxyAllowed: iosCaps?.network?.request_proxy !== false,
-        lanSyncAllowed: iosCaps?.sync?.lan !== false,
+        lanSyncAllowed: !webHost && iosCaps?.sync?.lan !== false,
+        supportsBackendLogs: !webHost,
+        supportsLlmApiLogs: !webHost,
         supportsCloseToTrayOnClose: hostPlatform() === 'windows',
         supportsDataRootSelection,
     };

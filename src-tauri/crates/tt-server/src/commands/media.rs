@@ -1,36 +1,20 @@
 //! Media libraries and user uploads: backgrounds, avatars, user images and files, assets.
 //!
-//! Every file path these commands accept is a page-staged upload resolved through `HostFiles`;
-//! the page can never name an arbitrary server path.
+//! Local upload paths are resolved through `HostFiles`; attachment references are confined
+//! by the shared user media service and store. Pages cannot name arbitrary server paths.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use serde::Serialize;
 use serde_json::Value;
-use tokio::fs;
 use tt_application::dto::character_dto::{CreateWithAvatarDto, UpdateAvatarDto};
 use tt_application::dto::sprite_dto::{UploadSpriteDto, UploadSpritePackDto};
-use tt_application::services::asset_service::validate_asset_file_name;
-use tt_contracts::client_asset_paths::{UserDataAssetKind, parse_user_data_asset_request_path};
 use tt_domain::models::avatar::CropInfo;
 use tt_domain::models::filename::sanitize_filename;
 use tt_runtime::CoreServices;
-use url::Url;
 
 use super::args::Args;
 use super::documents::staged_path_string;
 use super::{json, unsupported};
 use crate::error::CommandError;
 use crate::host::Host;
-
-/// Same wire shape as the native `upload_user_file` result.
-#[derive(Serialize)]
-struct UserFileUploadResult {
-    path: String,
-}
 
 pub(super) fn handles(command: &str) -> bool {
     matches!(
@@ -108,56 +92,20 @@ pub(super) async fn dispatch(
             }
             json(sanitize_filename(&file_name))
         }
-        "upload_user_file" => {
-            let name = a.required::<String>("name")?.trim().to_owned();
-            if name.is_empty() {
-                return Err(CommandError::BadRequest("No upload name specified".into()));
-            }
-            // SillyTavern validates user-file names with its asset file-name contract.
-            let name = validate_asset_file_name(&name)?;
-            let bytes = BASE64_STANDARD
-                .decode(a.required::<String>("data_base64")?.as_bytes())
-                .map_err(|error| {
-                    CommandError::BadRequest(format!("No upload data specified: {error}"))
-                })?;
-            let target = user_files_directory(s).await?.join(&name);
-            fs::write(&target, &bytes).await.map_err(|error| {
-                CommandError::InternalServerError(format!("Failed to save file: {error}"))
-            })?;
-            json(UserFileUploadResult {
-                path: format!("/user/files/{name}"),
-            })
-        }
-        "delete_user_file" => {
-            let raw: String = a.required("path")?;
-            if raw.trim().is_empty() {
-                return Err(CommandError::BadRequest("No path specified".into()));
-            }
-            let relative = user_file_reference(&raw)
-                .ok_or_else(|| CommandError::BadRequest("Invalid path".into()))?;
-            let target = user_files_directory(s).await?.join(relative);
-            if !is_file(&target).await {
-                return Err(CommandError::NotFound("File not found".into()));
-            }
-            fs::remove_file(&target).await.map_err(|error| {
-                CommandError::InternalServerError(format!("Failed to delete file: {error}"))
-            })?;
-            json(())
-        }
-        "verify_user_files" => {
-            let urls: Vec<String> = a.required("urls")?;
-            let files_dir = user_files_directory(s).await?;
-            let mut result = HashMap::with_capacity(urls.len());
-            for url in urls {
-                // References outside /user/files/ are omitted from the answer, as natively.
-                let Some(relative) = user_file_reference(&url) else {
-                    continue;
-                };
-                let exists = is_file(&files_dir.join(relative)).await;
-                result.insert(url, exists);
-            }
-            json(result)
-        }
+        "upload_user_file" => json(
+            host.media
+                .upload_user_file(
+                    &a.required::<String>("name")?,
+                    &a.required::<String>("data_base64")?,
+                )
+                .await?,
+        ),
+        "delete_user_file" => json(
+            host.media
+                .delete_user_file(&a.required::<String>("path")?)
+                .await?,
+        ),
+        "verify_user_files" => json(host.media.verify_user_files(a.required("urls")?).await?),
         "download_asset" => json(
             s.asset_service
                 .download_asset(
@@ -181,37 +129,4 @@ fn avatar_crop(raw: Option<String>) -> Option<CropInfo> {
             )
         })
         .ok()
-}
-
-async fn user_files_directory(s: &CoreServices) -> Result<PathBuf, CommandError> {
-    let files_dir = PathBuf::from(
-        s.user_directory_service
-            .get_default_user_directory()
-            .await?
-            .files,
-    );
-    fs::create_dir_all(&files_dir).await.map_err(|error| {
-        CommandError::InternalServerError(format!("Failed to ensure files directory: {error}"))
-    })?;
-    Ok(files_dir)
-}
-
-/// Maps a `/user/files/...` path or URL to its validated relative path, using the same parser
-/// that serves those files, so a reference names exactly the file the page can load.
-fn user_file_reference(raw: &str) -> Option<PathBuf> {
-    let raw = raw.trim();
-    let path = Url::parse(raw).map_or_else(|_| raw.to_owned(), |url| url.path().to_owned());
-    let path = format!("/{}", path.replace('\\', "/").trim_start_matches('/'));
-    match parse_user_data_asset_request_path(&path) {
-        Ok(Some(parsed)) if parsed.kind == UserDataAssetKind::UserFile => {
-            Some(parsed.relative_path)
-        }
-        _ => None,
-    }
-}
-
-async fn is_file(path: &Path) -> bool {
-    fs::metadata(path)
-        .await
-        .is_ok_and(|metadata| metadata.is_file())
 }

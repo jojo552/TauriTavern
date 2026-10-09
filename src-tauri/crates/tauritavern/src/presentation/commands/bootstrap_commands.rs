@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::app::backend_errors::BackendErrorHub;
 use crate::app::{AppState, BackendReadiness};
-use crate::presentation::commands::helpers::{log_command, map_command_error};
+use crate::presentation::commands::helpers::log_command;
 use crate::presentation::errors::CommandError;
 use tt_application::dto::bootstrap_dto::BootstrapMetadataDto;
 use tt_application::dto::group_dto::GroupDto;
@@ -21,9 +21,11 @@ pub async fn get_bootstrap_metadata(
             .character_service
             .get_all_characters(true)
             .await
-            .map_err(map_command_error(
-                "Failed to load bootstrap characters snapshot",
-            ))
+            .map_err(|error| {
+                CommandError::InternalServerError(format!(
+                    "Failed to load bootstrap characters snapshot: {error}"
+                ))
+            })
     };
 
     let groups_fut = async {
@@ -33,9 +35,11 @@ pub async fn get_bootstrap_metadata(
             .get_all_groups()
             .await
             .map(|groups| groups.into_iter().map(GroupDto::from).collect())
-            .map_err(map_command_error(
-                "Failed to load bootstrap groups snapshot",
-            ))
+            .map_err(|error| {
+                CommandError::InternalServerError(format!(
+                    "Failed to load bootstrap groups snapshot: {error}"
+                ))
+            })
     };
 
     let avatars_fut = async {
@@ -44,9 +48,11 @@ pub async fn get_bootstrap_metadata(
             .avatar_service
             .get_avatars()
             .await
-            .map_err(map_command_error(
-                "Failed to load bootstrap avatars snapshot",
-            ))
+            .map_err(|error| {
+                CommandError::InternalServerError(format!(
+                    "Failed to load bootstrap avatars snapshot: {error}"
+                ))
+            })
     };
 
     let secret_state_fut = async {
@@ -55,20 +61,22 @@ pub async fn get_bootstrap_metadata(
             .secret_service
             .read_secret_state()
             .await
-            .map_err(map_command_error(
-                "Failed to load bootstrap secret state snapshot",
-            ))
+            .map_err(|error| {
+                CommandError::InternalServerError(format!(
+                    "Failed to load bootstrap secret state snapshot: {error}"
+                ))
+            })
     };
 
     let (characters, groups, avatars, secret_state) =
         tokio::join!(characters_fut, groups_fut, avatars_fut, secret_state_fut);
 
-    // Character identity is startup-critical. Independent UI domains
-    // remain locally unavailable after their already user-visible load error.
+    // This is a complete startup snapshot: a failed read is not an empty domain.
+    // The caller owns failure presentation; do not also emit a backend-error toast.
     let characters = characters?;
-    let groups = groups.unwrap_or_default();
-    let avatars = avatars.unwrap_or_default();
-    let secret_state = secret_state.unwrap_or_default();
+    let groups = groups?;
+    let avatars = avatars?;
+    let secret_state = secret_state?;
 
     Ok(BootstrapMetadataDto {
         ios_policy: app_state.ios_policy.clone(),

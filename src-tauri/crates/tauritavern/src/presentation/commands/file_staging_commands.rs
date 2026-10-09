@@ -1,11 +1,9 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
+use tt_adapter_storage_core::staged_file;
 
 use crate::app::AppState;
 use crate::infrastructure::staging::{create_staged_file, discard_file, validate_staged_path};
@@ -70,42 +68,6 @@ fn chunk_offset_from_request(request: &tauri::ipc::Request<'_>) -> Result<u64, C
         .map_err(|_| CommandError::BadRequest("File staging offset header is invalid".to_string()))
 }
 
-async fn append_staged_chunk(path: &Path, offset: u64, data: &[u8]) -> Result<u64, CommandError> {
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .await
-        .map_err(|error| {
-            CommandError::InternalServerError(format!("Failed to open staged file: {}", error))
-        })?;
-
-    let current_len = file
-        .metadata()
-        .await
-        .map_err(|error| {
-            CommandError::InternalServerError(format!("Failed to stat staged file: {}", error))
-        })?
-        .len();
-    if current_len != offset {
-        return Err(CommandError::BadRequest(format!(
-            "File staging offset mismatch: expected {}, got {}",
-            current_len, offset
-        )));
-    }
-
-    file.write_all(data).await.map_err(|error| {
-        CommandError::InternalServerError(format!("Failed to write file staging chunk: {}", error))
-    })?;
-
-    // Tokio file writes complete on the blocking pool. Flush the same handle
-    // before acknowledging bytes that the next command must be able to observe.
-    file.flush().await.map_err(|error| {
-        CommandError::InternalServerError(format!("Failed to flush file staging chunk: {}", error))
-    })?;
-
-    Ok(offset + data.len() as u64)
-}
-
 #[tauri::command]
 pub async fn stage_file_begin(
     app: AppHandle,
@@ -149,7 +111,7 @@ pub async fn stage_file_chunk(
     let offset = chunk_offset_from_request(&request)?;
     let data = chunk_bytes_from_request(&request)?;
     let path = validate_staged_path(&app, &file_path).await?;
-    append_staged_chunk(&path, offset, &data).await
+    staged_file::append(&path, offset, &data).await.map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -159,16 +121,7 @@ pub async fn stage_file_finish(
     expected_size: u64,
 ) -> Result<StageFileFinishResult, CommandError> {
     let path = validate_staged_path(&app, &file_path).await?;
-    let metadata = fs::metadata(&path).await.map_err(|error| {
-        CommandError::InternalServerError(format!("Failed to stat staged file: {}", error))
-    })?;
-    let size = metadata.len();
-    if size != expected_size {
-        return Err(CommandError::BadRequest(format!(
-            "File staging size mismatch: expected {}, got {}",
-            expected_size, size
-        )));
-    }
+    let size = staged_file::finish(&path, expected_size).await?;
 
     Ok(StageFileFinishResult {
         file_path: path.to_string_lossy().to_string(),
@@ -213,78 +166,4 @@ pub async fn stage_file_from_url(
 pub async fn stage_file_discard(app: AppHandle, file_path: String) -> Result<(), CommandError> {
     let path = validate_staged_path(&app, &file_path).await?;
     discard_file(&path).await.map_err(CommandError::from)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    struct TempStagedFile {
-        path: PathBuf,
-    }
-
-    impl TempStagedFile {
-        fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "tauritavern-file-staging-test-{}.bin",
-                uuid::Uuid::new_v4().simple()
-            ));
-            std::fs::File::create(&path).expect("create staged test file");
-            Self { path }
-        }
-    }
-
-    impl Drop for TempStagedFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-
-    #[tokio::test]
-    async fn append_staged_chunk_is_fully_observable_before_acknowledgement() {
-        let staged = TempStagedFile::new();
-        let data = (0..1_094_711)
-            .map(|index| (index % 251) as u8)
-            .collect::<Vec<_>>();
-
-        let next_offset = append_staged_chunk(&staged.path, 0, &data)
-            .await
-            .expect("append staged chunk");
-
-        assert_eq!(next_offset, data.len() as u64);
-        assert_eq!(
-            fs::metadata(&staged.path)
-                .await
-                .expect("stat staged file")
-                .len(),
-            data.len() as u64
-        );
-        assert_eq!(
-            fs::read(&staged.path).await.expect("read staged file"),
-            data
-        );
-    }
-
-    #[tokio::test]
-    async fn append_staged_chunk_rejects_an_unexpected_offset_without_writing() {
-        let staged = TempStagedFile::new();
-
-        let error = append_staged_chunk(&staged.path, 1, b"chunk")
-            .await
-            .expect_err("reject mismatched offset");
-
-        assert!(matches!(
-            error,
-            CommandError::BadRequest(message)
-                if message == "File staging offset mismatch: expected 0, got 1"
-        ));
-        assert_eq!(
-            fs::metadata(&staged.path)
-                .await
-                .expect("stat staged file")
-                .len(),
-            0
-        );
-    }
 }

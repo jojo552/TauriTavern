@@ -8,6 +8,7 @@ pub mod png_metadata;
 pub mod preset_file_naming;
 pub mod repositories;
 pub mod sillytavern_sorting;
+pub mod staged_file;
 
 pub use bundled_resources::DirectoryBundledResources;
 pub use file_system::{DataDirectory, DataDirectoryDataRootInitializer};

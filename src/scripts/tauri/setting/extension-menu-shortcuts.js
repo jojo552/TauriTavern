@@ -1,17 +1,18 @@
 // @ts-check
 
-import { getActiveIosPolicyCapabilities } from '../../tauritavern/ios-policy.js';
+import { resolveTauriTavernSettingsCapabilities } from './setting-panel/settings-view-model.js';
 
 const STORAGE_KEY = 'tauritavern:extensions_menu_shortcuts';
 const CONTAINER_ID = 'tauritavern_extensions_menu_shortcuts';
 const DEFAULT_SHORTCUT_IDS = ['sync'];
 
+/** @type {{ id: string, label: string, icon: string, capability?: keyof import('./settings-app/SettingsContract').SettingsCapabilities, open: () => Promise<unknown> }[]} */
 const SHORTCUTS = [
     {
         id: 'sync',
         label: 'Sync Panel',
         icon: 'fa-rotate',
-        available: () => getActiveIosPolicyCapabilities()?.sync?.lan !== false,
+        capability: 'lanSyncAllowed',
         open: async () => {
             const { openSyncPopup } = await import('./setting-panel/sync-popup.js');
             await openSyncPopup();
@@ -28,6 +29,7 @@ const SHORTCUTS = [
     },
     {
         id: 'backend-logs',
+        capability: 'supportsBackendLogs',
         label: 'Backend Logs',
         icon: 'fa-server',
         open: async () => {
@@ -37,6 +39,7 @@ const SHORTCUTS = [
     },
     {
         id: 'llm-api-logs',
+        capability: 'supportsLlmApiLogs',
         label: 'LLM API Logs',
         icon: 'fa-file-lines',
         open: async () => {
@@ -53,6 +56,11 @@ const SHORTCUTS = [
 ];
 
 const SHORTCUT_IDS = new Set(SHORTCUTS.map(shortcut => shortcut.id));
+
+function getAvailableShortcuts() {
+    const capabilities = resolveTauriTavernSettingsCapabilities();
+    return SHORTCUTS.filter(shortcut => !shortcut.capability || capabilities[shortcut.capability]);
+}
 
 /** @param {unknown} value */
 function normalizeShortcutIds(value) {
@@ -123,8 +131,8 @@ export async function renderExtensionMenuShortcuts(ids = getExtensionMenuShortcu
         menu.prepend(container);
     }
 
-    const items = SHORTCUTS
-        .filter(shortcut => selected.has(shortcut.id) && (shortcut.available?.() ?? true))
+    const items = getAvailableShortcuts()
+        .filter(shortcut => selected.has(shortcut.id))
         .map(shortcut => {
             const item = createMenuItem(shortcut, i18n.translate);
             item.addEventListener('click', () => popup.runOrPopup(shortcut.open));
@@ -138,6 +146,7 @@ export async function renderExtensionMenuShortcuts(ids = getExtensionMenuShortcu
 
 export async function openExtensionMenuShortcutsManager() {
     const selected = new Set(getExtensionMenuShortcutIds());
+    const availableShortcuts = getAvailableShortcuts();
     const [{ POPUP_RESULT, POPUP_TYPE }, { translate }, { createTauriTavernPanelPopup }] = await Promise.all([
         import('../../popup.js'),
         import('../../i18n.js'),
@@ -157,13 +166,10 @@ export async function openExtensionMenuShortcutsManager() {
         okButton: translate('Save'),
         cancelButton: translate('Cancel'),
         leftAlign: true,
-        customInputs: SHORTCUTS.map(shortcut => ({
+        customInputs: availableShortcuts.map(shortcut => ({
             id: `tauritavern_shortcut_toggle_${shortcut.id}`,
             label: translate(shortcut.label),
             defaultState: selected.has(shortcut.id),
-            tooltip: shortcut.available?.() === false
-                ? translate('LAN Sync is disabled by the active iOS policy.')
-                : undefined,
         })),
     });
 
@@ -171,8 +177,11 @@ export async function openExtensionMenuShortcutsManager() {
         return;
     }
 
+    // Keep saved native-only choices when editing the available browser tools.
     const ids = SHORTCUTS
-        .filter(shortcut => popup.inputResults?.get(`tauritavern_shortcut_toggle_${shortcut.id}`) === true)
+        .filter(shortcut => availableShortcuts.includes(shortcut)
+            ? popup.inputResults?.get(`tauritavern_shortcut_toggle_${shortcut.id}`) === true
+            : selected.has(shortcut.id))
         .map(shortcut => shortcut.id);
     setExtensionMenuShortcutIds(ids);
     await renderExtensionMenuShortcuts(ids);

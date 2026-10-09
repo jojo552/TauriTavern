@@ -1,6 +1,7 @@
 // Application bootstrap.
 
 import { isWebHost } from './scripts/util/host-identity.js';
+import { showStartupError } from './startup-error.js';
 
 const IS_WEB_HOST = isWebHost();
 // Native hosts can inject bridge internals after this module. Web never claims that runtime.
@@ -311,6 +312,7 @@ async function initializeApplication() {
         }
     } catch (error) {
         console.error('TauriTavern: Failed to initialize application:', error);
+        showStartupError(error);
     } finally {
         if (PERF_ENABLED) {
             safePerfMark('tt:init:end');

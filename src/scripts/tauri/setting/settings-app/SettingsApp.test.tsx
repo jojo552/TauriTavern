@@ -97,6 +97,8 @@ function createOptions(overrides: Partial<SettingsMountOptions> = {}): SettingsM
             capabilities: {
                 requestProxyAllowed: true,
                 lanSyncAllowed: true,
+                supportsBackendLogs: true,
+                supportsLlmApiLogs: true,
                 supportsCloseToTrayOnClose: true,
                 supportsDataRootSelection: true,
             },
@@ -158,11 +160,43 @@ test('settings mount enforces its public boundary and unmounts the root', () => 
         tr,
     })).toThrow('TauriTavern settings action is unavailable: chooseWallpaper');
 
+    expect(() => mountTauriTavernSettingsApp(document.createElement('div'), {
+        ...options,
+        viewModel: {
+            ...options.viewModel,
+            capabilities: { ...options.viewModel.capabilities, supportsBackendLogs: undefined },
+        },
+    })).toThrow('TauriTavern settings capability is unavailable: supportsBackendLogs');
+
     const { container, handle } = mountApp();
     expect(container.innerHTML).not.toBe('');
 
     close(handle);
     expect(container.innerHTML).toBe('');
+});
+
+test('projected capabilities remove unavailable browser tools without reducing native tools', () => {
+    for (const native of [true, false]) {
+        const options = createOptions();
+        options.viewModel.capabilities = {
+            requestProxyAllowed: true,
+            lanSyncAllowed: native,
+            supportsBackendLogs: native,
+            supportsLlmApiLogs: native,
+            supportsCloseToTrayOnClose: native,
+            supportsDataRootSelection: native,
+        };
+        const { container, handle } = mountApp(options);
+        const view = within(container);
+        for (const name of ['Backend Logs', 'LLM API Logs', 'Open Panel']) {
+            expect(Boolean(view.queryByRole('button', { name }))).toBe(native);
+        }
+        expect(container.textContent?.includes('Data Directory')).toBe(native);
+        expect(Boolean(view.queryByRole('checkbox', { name: 'Minimize to tray on close (Windows)' }))).toBe(native);
+        expect(view.getByRole('button', { name: 'Frontend Logs' })).toBeTruthy();
+        expect(view.getByRole('button', { name: 'Manage Quick Access' })).toBeTruthy();
+        close(handle);
+    }
 });
 
 test('draft preserves stored emptiness and exposes synchronous isolated edits', () => {
@@ -250,6 +284,8 @@ test('iOS proxy repair path: an enabled proxy can be disabled but not re-enabled
     options.viewModel.capabilities = {
         requestProxyAllowed: false,
         lanSyncAllowed: false,
+        supportsBackendLogs: true,
+        supportsLlmApiLogs: true,
         supportsCloseToTrayOnClose: false,
         supportsDataRootSelection: false,
     };

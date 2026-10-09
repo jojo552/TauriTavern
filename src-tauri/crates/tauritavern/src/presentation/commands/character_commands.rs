@@ -3,9 +3,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::app::AppState;
-use crate::presentation::commands::helpers::{
-    log_command, log_user_visible_error, map_command_error,
-};
+use crate::presentation::commands::helpers::{log_command, map_command_error};
 use crate::presentation::errors::CommandError;
 use tt_application::dto::character_dto::{
     BulkMergeCharacterCardDataDto, BulkMergeCharacterCardDataResultDto, CharacterChatDto,
@@ -16,9 +14,6 @@ use tt_application::dto::character_dto::{
     ResolveCharacterLorebookConflictDto, ResolveCharacterLorebookConflictResultDto,
     UpdateAvatarDto, UpdateCharacterCardDataDto, UpdateCharacterDto,
 };
-use tt_domain::models::skill::{SkillScope, SkillScopeRetargetRequest};
-
-const SKILL_SOURCE_KIND_CHARACTER: &str = "character";
 
 #[tauri::command]
 pub async fn get_all_characters(
@@ -192,30 +187,12 @@ pub async fn delete_character(
 ) -> Result<(), CommandError> {
     log_command(format!("delete_character {}", dto.name));
 
-    let name = dto.name.clone();
     app_state
         .services
         .character_service
-        .delete_character(dto)
+        .delete_character(dto, &app_state.services.skill_service)
         .await
-        .map_err(map_command_error("Failed to delete character"))?;
-
-    if let Err(error) = app_state
-        .services
-        .skill_service
-        .delete_skills_for_source(
-            SKILL_SOURCE_KIND_CHARACTER,
-            &character_skill_source_id(&name),
-        )
-        .await
-    {
-        log_user_visible_error(format!(
-            "Deleted character '{}' but could not delete its linked Agent Skills: {}",
-            name, error
-        ));
-    }
-
-    Ok(())
+        .map_err(map_command_error("Failed to delete character"))
 }
 
 #[tauri::command]
@@ -228,43 +205,12 @@ pub async fn rename_character(
         dto.old_name, dto.new_name
     ));
 
-    let old_character_id = dto.old_name.clone();
-    let renamed = app_state
+    app_state
         .services
         .character_service
-        .rename_character(dto)
+        .rename_character(dto, &app_state.services.skill_service)
         .await
-        .map_err(map_command_error("Failed to rename character"))?;
-
-    let Some(new_character_id) = renamed
-        .avatar
-        .strip_suffix(".png")
-        .filter(|id| !id.is_empty())
-    else {
-        log_user_visible_error("Renamed character but could not retarget its linked Agent Skills");
-        return Ok(renamed);
-    };
-    if old_character_id != new_character_id
-        && let Err(error) = app_state
-            .services
-            .skill_service
-            .retarget_scope(SkillScopeRetargetRequest {
-                from_scope: SkillScope::Character {
-                    character_id: old_character_id,
-                },
-                to_scope: SkillScope::Character {
-                    character_id: new_character_id.to_string(),
-                },
-            })
-            .await
-    {
-        log_user_visible_error(format!(
-            "Renamed character but could not retarget its linked Agent Skills: {}",
-            error
-        ));
-    }
-
-    Ok(renamed)
+        .map_err(map_command_error("Failed to rename character"))
 }
 
 #[tauri::command]
@@ -376,11 +322,4 @@ pub async fn clear_character_cache(
         .clear_cache()
         .await
         .map_err(map_command_error("Failed to clear character cache"))
-}
-
-fn character_skill_source_id(name: &str) -> String {
-    SkillScope::Character {
-        character_id: name.to_string(),
-    }
-    .label()
 }

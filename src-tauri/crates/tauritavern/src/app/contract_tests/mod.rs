@@ -89,6 +89,7 @@ const AGENT_CONTRACT_ASYNC_TIMEOUT: Duration = Duration::from_secs(5);
 mod agent_runtime;
 mod character;
 mod host_resources;
+mod linked_skill_lifecycle;
 mod profile_migration;
 mod world_info;
 

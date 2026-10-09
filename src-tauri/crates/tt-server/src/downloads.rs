@@ -34,13 +34,24 @@ pub struct Downloads {
     pending: Mutex<HashMap<String, PendingDownload>>,
 }
 
-/// Deletes the served file when the response body is dropped (sent, failed or aborted).
+/// Await cleanup at EOF; dropping an unfinished body still schedules cleanup.
 struct DeleteOnDrop(PathBuf);
+
+impl DeleteOnDrop {
+    async fn finish(&mut self) {
+        // Tokio schedules the filesystem operation before yielding. Transfer ownership first
+        // so cancellation while awaiting it cannot schedule a second deletion from Drop.
+        let path = std::mem::take(&mut self.0);
+        remove(&path).await;
+    }
+}
 
 impl Drop for DeleteOnDrop {
     fn drop(&mut self) {
-        let path = std::mem::take(&mut self.0);
-        tokio::spawn(async move { remove(&path).await });
+        if !self.0.as_os_str().is_empty() {
+            let path = std::mem::take(&mut self.0);
+            tokio::spawn(async move { remove(&path).await });
+        }
     }
 }
 
@@ -118,10 +129,20 @@ impl Downloads {
         let length = file.metadata().await.map(|m| m.len()).ok();
         let guard = DeleteOnDrop(entry.path);
         let stream = ReaderStream::new(file);
-        let body = Body::from_stream(futures_util::StreamExt::map(stream, move |chunk| {
-            let _ = &guard;
-            chunk
-        }));
+        let body = Body::from_stream(futures_util::stream::unfold(
+            (stream, guard),
+            |(mut stream, mut guard)| async move {
+                match futures_util::StreamExt::next(&mut stream).await {
+                    Some(chunk) => Some((chunk, (stream, guard))),
+                    None => {
+                        // Close the file before deleting it (also required on Windows).
+                        drop(stream);
+                        guard.finish().await;
+                        None
+                    }
+                }
+            },
+        ));
         let mut response = Response::new(body);
         let headers = response.headers_mut();
         headers.insert(
@@ -202,12 +223,7 @@ mod tests {
             StatusCode::NOT_FOUND
         );
 
-        for _ in 0..50 {
-            if !path.exists() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        // Collecting the response body observes EOF, including its awaited file cleanup.
         assert!(!path.exists(), "a served download must be deleted");
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }

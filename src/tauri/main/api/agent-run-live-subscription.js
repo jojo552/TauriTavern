@@ -30,18 +30,16 @@ export function createAgentRunLiveSubscribe({ safeInvoke, channelFactory = creat
             dto: { runId: normalizedRunId },
             channel,
         }));
-        completion.then(
-            () => {
-                active = false;
-            },
-            (error) => {
-                if (!active) {
-                    return;
-                }
-                active = false;
-                reportError(error, options?.onError);
-            },
-        );
+        // A successful return only means the host stopped producing. Updates it sent before
+        // returning may still be in flight (the browser host delivers them on a separate event
+        // stream), so they stay deliverable; the channel itself ends after the last one.
+        void completion.catch((error) => {
+            if (!active) {
+                return;
+            }
+            active = false;
+            reportError(error, options?.onError);
+        });
 
         return function unsubscribe() {
             active = false;

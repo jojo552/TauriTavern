@@ -951,6 +951,7 @@ async fn character_service_replaces_an_unreadable_existing_card() {
 async fn character_delete_removes_only_string_linked_lorebooks() {
     let root = temp_root("character-delete-lorebook");
     let (service, world_repository) = character_service_with_world_repository(&root).await;
+    let skill_service = SkillService::new(Arc::new(FileSkillRepository::new(root.join("skills"))));
     for name in ["Lore", "42"] {
         world_repository
             .save_world_info(name, &world_info(name))
@@ -966,10 +967,13 @@ async fn character_delete_removes_only_string_linked_lorebooks() {
         .await
         .expect("write character card");
         service
-            .delete_character(DeleteCharacterDto {
-                name: name.to_string(),
-                delete_chats: false,
-            })
+            .delete_character(
+                DeleteCharacterDto {
+                    name: name.to_string(),
+                    delete_chats: false,
+                },
+                &skill_service,
+            )
             .await
             .expect("delete character");
     }

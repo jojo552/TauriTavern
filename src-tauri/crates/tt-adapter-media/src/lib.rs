@@ -4,6 +4,7 @@ pub mod persona_cards;
 mod repositories;
 mod thumbnails;
 mod user_media_store;
+mod user_files;
 
 pub use host_resources::FilesystemHostResourceStore;
 pub use repositories::{

@@ -8,6 +8,7 @@ mod files;
 mod host;
 mod resources;
 mod security;
+mod startup_paths;
 
 use clap::Parser;
 use std::{
@@ -78,19 +79,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("listen must be a loopback address; configure an HTTPS reverse proxy".into());
     }
-    let web_root = tokio::fs::canonicalize(&options.web_root).await?;
-    let resource_root = tokio::fs::canonicalize(&options.resource_root).await?;
-    let app_root = options.app_root.clone();
-    let data_directory = tt_runtime::initialize_data_directory(&options.data_root).await?;
-    let data_root = tokio::fs::canonicalize(&options.data_root).await?;
-    if web_root.starts_with(&data_root)
-        || data_root.starts_with(&web_root)
-        || resource_root.starts_with(&data_root)
-        || data_root.starts_with(&resource_root)
-    {
-        return Err("web/resource roots and private data root must not overlap".into());
-    }
-    tokio::fs::create_dir_all(&options.app_root).await?;
+    let startup_paths::StartupPaths {
+        app_root,
+        data_root,
+        web_root,
+        resource_root,
+        archive_root,
+    } = startup_paths::StartupPaths::resolve(
+        &options.app_root,
+        &options.data_root,
+        &options.web_root,
+        &options.resource_root,
+    )
+    .await?;
+    let data_directory = tt_runtime::initialize_data_directory(&data_root).await?;
     let password = tokio::fs::read_to_string(&options.password_file).await?;
     #[cfg(unix)]
     {
@@ -118,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         load_tauritavern_settings_blocking(&data_root.join("default-user"), &initial_settings)?;
     let ios_policy = resolve_ios_policy_activation_report(IosPolicyScope::Ignored, None, None)?;
     let config = RuntimeConfig {
-        app_root: options.app_root,
+        app_root: app_root.clone(),
         tauritavern_settings: startup_settings.clone(),
         initial_tauritavern_settings: initial_settings,
         ios_policy: ios_policy.clone(),
@@ -178,8 +180,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .run(cancel.clone()),
     );
     let files = files::HostFiles::new(&app_root).await?;
-    // Same layout as the native host's runtime paths: archive staging under the app root.
-    let archive_root = app_root.join(".data-archive");
     let archives = Arc::new(
         tt_application::services::data_archive_service::DataArchiveService::new(
             services.database_service.clone(),

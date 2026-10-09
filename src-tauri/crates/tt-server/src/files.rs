@@ -93,13 +93,7 @@ impl HostFiles {
     }
 
     pub async fn discard_file(&self, path: &Path) -> Result<(), DomainError> {
-        match fs::remove_file(path).await {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(DomainError::InternalError(format!(
-                "Failed to remove the staged file: {error}"
-            ))),
-        }
+        tt_adapter_storage_core::staged_file::discard(path).await
     }
 }
 

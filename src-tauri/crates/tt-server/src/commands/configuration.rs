@@ -284,9 +284,7 @@ async fn save_preset(
             "Preset data cannot be null".into(),
         ));
     }
-    let preset = s.preset_service.create_preset(name, api_id, data)?;
-    s.preset_service.save_preset(&preset).await?;
-    Ok(value!({"name": preset.name}))
+    json(s.preset_service.save_preset_data(name, api_id, data).await?)
 }
 async fn delete_preset(
     s: &CoreServices,
@@ -294,12 +292,8 @@ async fn delete_preset(
     kind: &PresetType,
 ) -> Result<(), CommandError> {
     nonempty_name(name)?;
-    s.preset_service.delete_preset(name, kind).await?;
-    s.skill_service
-        .delete_skills_for_source(
-            "preset",
-            &format!("preset:{}:{}", kind.to_api_id().trim(), name.trim()),
-        )
-        .await?;
-    Ok(())
+    Ok(s
+        .preset_service
+        .delete_preset(name, kind, &s.skill_service)
+        .await?)
 }

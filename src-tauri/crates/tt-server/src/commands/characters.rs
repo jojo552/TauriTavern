@@ -1,10 +1,7 @@
 use super::{args::Args, json, unsupported};
 use crate::error::CommandError;
 use serde_json::Value;
-use tt_application::dto::character_dto::{
-    DeleteCharacterDto, RenameCharacterDto, UpdateCharacterCardDataDto,
-};
-use tt_domain::models::skill::{SkillScope, SkillScopeRetargetRequest};
+use tt_application::dto::character_dto::UpdateCharacterCardDataDto;
 use tt_runtime::CoreServices;
 
 pub(super) fn handles(command: &str) -> bool {
@@ -85,52 +82,16 @@ pub(super) async fn dispatch(
                 .resolve_lorebook_conflict(a.required("dto")?)
                 .await?,
         ),
-        "delete_character" => {
-            let dto: DeleteCharacterDto = a.required("dto")?;
-            let name = dto.name.clone();
-            s.character_service.delete_character(dto).await?;
-            // Preserve the existing command's best-effort linked-skill cleanup.
-            if let Err(error) = s
-                .skill_service
-                .delete_skills_for_source(
-                    "character",
-                    &SkillScope::Character { character_id: name }.label(),
-                )
-                .await
-            {
-                tracing::error!(%error, "Deleted character but could not delete its linked Agent Skills");
-            }
-            json(())
-        }
-        "rename_character" => {
-            let dto: RenameCharacterDto = a.required("dto")?;
-            let old_id = dto.old_name.clone();
-            let renamed = s.character_service.rename_character(dto).await?;
-            if let Some(new_id) = renamed
-                .avatar
-                .strip_suffix(".png")
-                .filter(|id| !id.is_empty())
-            {
-                if old_id != new_id
-                    && let Err(error) = s
-                        .skill_service
-                        .retarget_scope(SkillScopeRetargetRequest {
-                            from_scope: SkillScope::Character {
-                                character_id: old_id,
-                            },
-                            to_scope: SkillScope::Character {
-                                character_id: new_id.to_owned(),
-                            },
-                        })
-                        .await
-                {
-                    tracing::error!(%error, "Renamed character but could not retarget its linked Agent Skills");
-                }
-            } else {
-                tracing::error!("Renamed character but could not retarget its linked Agent Skills");
-            }
-            json(renamed)
-        }
+        "delete_character" => json(
+            s.character_service
+                .delete_character(a.required("dto")?, &s.skill_service)
+                .await?,
+        ),
+        "rename_character" => json(
+            s.character_service
+                .rename_character(a.required("dto")?, &s.skill_service)
+                .await?,
+        ),
         "duplicate_character" => json(
             s.character_service
                 .duplicate_character(a.required("dto")?)

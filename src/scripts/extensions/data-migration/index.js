@@ -1,6 +1,7 @@
 import { renderExtensionTemplateAsync } from '../../extensions.js';
 import { t, translate } from '../../i18n.js';
 import { Popup } from '../../popup.js';
+import { showExportSuccessToast } from '../../download-feedback.js';
 import { getActiveIosPolicyActivationReport } from '../../tauritavern/ios-policy.js';
 import { flushLifecycleState } from '../../../tauri/main/services/lifecycle/lifecycle-flush-service.js';
 import { isWebHost } from '../../../tauri-bridge.js';
@@ -303,8 +304,10 @@ async function runMigrationJob(kind, startJob) {
                 reloadSoon();
             } else {
                 const saveResult = await saveExportArchive(jobId);
-                if (saveResult.delivered || saveResult.status === 'handed-off') {
-                    toastr.success(t`Data archive exported`, t`Export completed`);
+                showExportSuccessToast(saveResult);
+                if (saveResult.status === 'handed-off') {
+                    setStatusText(t`Download started`);
+                } else if (saveResult.delivered === true) {
                     setStatusText(t`Export completed`);
                 } else {
                     setStatusText(t`Export cancelled`);

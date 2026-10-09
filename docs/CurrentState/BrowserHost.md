@@ -13,6 +13,8 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 - 两种宿主复用 `init.js → tauri-main.js → bootstrapTauriMain()`、前端兼容路由、同源窗口请求 patch、扩展运行时与 `__TAURITAVERN__` API 装配。真实平台差异留在宿主能力边界，不复制路由业务。
 - 缩略图、用户文件、扩展资源与用户 CSS 共用 `HostResourceService`，保持真实子资源端点、404、条件缓存与媒体 Range 语义，不通过 DOM patch 模拟资源。
 
+启动快照的任一域读取失败会使请求失败并由前端统一显示阻断错误与重载入口；早期模块/session 初始化失败也使用这个独立于主应用的面板。不返回无区分的空数据，也不依赖服务器日志代替用户反馈。
+
 ## 2. 认证、页面 session 与 CSRF
 
 [host.rs](../../src-tauri/crates/tt-server/src/host.rs) 的全部 HTTP 路由，包括静态资源与下载，都经过 Basic 认证。[security.rs](../../src-tauri/crates/tt-server/src/security.rs) 校验配置的精确 Host；页面 session、invoke、SSE 与下载还会拒绝不匹配的 Origin / 跨站 Fetch Metadata，不信任 forwarded host/origin。
@@ -37,8 +39,8 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 [PageBus](../../src-tauri/crates/tt-server/src/events.rs) 承载页面事件与 Channel：
 
 - Channel 参数序列化为 `{ "$channel": "<id>" }`；ID 只属于创建它的页面，且每个 ID 只能打开一次。
-- `channel` 帧带从 0 开始、严格递增的 `sequence`，`channel-end` 结束该 Channel；前端拒绝未知或乱序帧。
-- Channel 生命周期由后端持有它的任务/注册项决定，不在每次发起它的 invoke 返回时一律删除；同 session 短暂断线保留 channels、listeners 与资源。
+- `channel` 帧带从 0 开始、严格递增的 `sequence`；序号分配、入队和结束共用 Channel 的串行边界，支持并发任务共享 sink。`channel-end` 结束该 Channel；前端拒绝未知或乱序帧。
+- Channel 生命周期由后端持有它的任务/注册项决定，不在每次发起它的 invoke 返回时一律删除；实时消费者也不能因独立 HTTP 请求成功就丢弃稍后到达的帧。订阅主动取消或 Channel 结束才停止交付，同 session 短暂断线保留 channels、listeners 与资源。
 - 数据帧还有页面级 SSE `id`；ready/reset 控制帧无 id，不能推进数据 cursor。PageBus 保存最多 4096 帧、总序列化 JSON 16 MiB 的滚动回放窗口，淘汰最旧帧不是永久毒化在线页面。cursor 落在窗口外、在线消费者落后或超大单帧时明确 reset；字节上限不是上游 Value 构造的瞬时内存上限。
 - SSE 断线后，transport 关闭旧 EventSource，以 1 秒到最多 10 秒退避显式重开同页 SSE，从最后已派发 `id` 继续，不重新执行已经派发的异步回调。只有这一条前端恢复路径；旧 source 的迟到回调被 identity/epoch fence 拒绝。重连状态向用户可见。
 - SSE 本身断开不强制中止仍可得到成功响应的 HTTP 保存。实际 HTTP 中断只报告结果未知，绝不自动重放 invoke；一次性 commit 的 offset 与最终确认规则保持不变。
@@ -56,7 +58,7 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 - `stage_file_begin` 分配 UUID 文件并返回 `file_path` 与块大小；头像、用户头像、世界书导入为 512 KiB，其他 kind 当前为 8 MiB。
 - `stage_file_chunk` 写入原始 bytes，offset 必须等于当前文件长度；重复或乱序块失败，不能盲目重放。
-- `stage_file_finish` 校验最终长度；消费后的暂存文件由调用链负责清理，失败路径尝试 discard。
+- `stage_file_finish` 校验最终长度；两宿主的 append/finish/discard 复用 `tt-adapter-storage-core::staged_file`，同一 canonical 文件的 offset 检查与追加、最终长度检查、删除在同一串行边界中执行，不重复维护宿主 IO。消费后的暂存文件由调用链负责清理，失败路径尝试 discard。
 
 `file_path` 当前确实是服务端绝对暂存路径；前端应当把它当作宿主发放的暂存引用，不作为任意文件访问入口。[HostFiles](../../src-tauri/crates/tt-server/src/files.rs) 验证 kind/extension，并用 canonical 路径约束到宿主 staging 根。
 
@@ -79,6 +81,8 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 ## 5. 当前能力边界
 
+设置页与扩展快捷菜单共同消费宿主能力投影；浏览器不会呈现可点击的原生同步、后端日志或 LLM 日志入口，已有保存的快捷入口也按当前能力过滤。ABI 对不可用命令仍显式返回错误，不伪装功能已经实现。
+
 | 能力 | 浏览器宿主当前状态 |
 | --- | --- |
 | SillyTavern 纯前端扩展、共享 API 与资源端点 | 复用现有前端/共享服务；不是任意第三方扩展全部兼容的保证。Node 后端插件不支持。 |
@@ -90,6 +94,10 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 | Tauri plugin / shell 能力 | 不模拟 Tauri runtime，不支持 `plugin:*` invoke；原生数据目录选择、系统分享、托盘与原生窗口控制不能视为浏览器能力。 |
 
 不可用或拼错的 HTTP command 明确返回错误，不静默降级为成功。后续接入能力应复用共享服务，并保留真实宿主差异；测试结果应注明验证范围，不能由 command 已接线推导全平台通过。
+
+用户文件 upload/delete/verify 由共享 `UserMediaService` 与文件 adapter 执行，业务验证规则不在两个 host command 各维护一份；写入以同步暂存文件后原子发布为边界，不直接截断旧文件。Agent 持久状态 prune、角色重命名/删除的关联 Skill 迁移，以及预设删除的关联清理同样由已有应用用例负责。
+
+启动时 canonicalize app/data/web/resource 根并验证实际 `security`、`staging`、`.data-archive` 私有目录不会被静态提供或作为用户数据归档；相对 app 根会规范化为绝对路径，`app=/state,data=/state/data` 的安全嵌套仍合法。该校验是宿主配置边界，不是对本机管理员动态替换目录的 sandbox。
 
 ## 6. 构建与发布产物
 

@@ -4,14 +4,11 @@
 //! The page cannot name server paths. Every `file_path` argument must be a path the page
 //! received from `stage_file_begin` / `stage_file_from_url`, and is resolved through `HostFiles`.
 
-use std::path::Path;
-
 use http::HeaderMap;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
+use tt_adapter_storage_core::staged_file;
 use tt_application::dto::character_dto::{ImportCharacterDto, ReplaceCharacterDto};
 use tt_application::dto::chat_dto::{
     ImportCharacterChatsDto, ImportGroupChatDto, RestoreCharacterChatBackupDto,
@@ -106,19 +103,7 @@ pub(super) async fn dispatch(
                 .validate_staged_path(&a.required::<String>("file_path")?)
                 .await?;
             let expected_size: u64 = a.required("expected_size")?;
-            let size = fs::metadata(&path)
-                .await
-                .map_err(|error| {
-                    CommandError::InternalServerError(format!(
-                        "Failed to stat staged file: {error}"
-                    ))
-                })?
-                .len();
-            if size != expected_size {
-                return Err(CommandError::BadRequest(format!(
-                    "File staging size mismatch: expected {expected_size}, got {size}"
-                )));
-            }
+            let size = staged_file::finish(&path, expected_size).await?;
             json(StageFileFinishResult {
                 file_path: path.to_string_lossy().into_owned(),
                 size,
@@ -229,7 +214,7 @@ pub(super) async fn raw(
         .parse::<u64>()
         .map_err(|_| CommandError::BadRequest("File staging offset header is invalid".into()))?;
     let path = host.files.validate_staged_path(&file_path).await?;
-    Ok(Value::from(append_staged_chunk(&path, offset, body).await?))
+    Ok(Value::from(staged_file::append(&path, offset, body).await?))
 }
 
 /// Resolves a page-supplied staged path; services then receive only paths inside the staging root.
@@ -250,64 +235,4 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, CommandErro
         .ok_or_else(|| CommandError::BadRequest(format!("Missing file staging header: {name}")))?
         .to_str()
         .map_err(|_| CommandError::BadRequest(format!("Invalid file staging header: {name}")))
-}
-
-/// Appends one frame. The page's offset must equal the current file length, so a retried or
-/// reordered frame fails instead of corrupting the staged file.
-async fn append_staged_chunk(path: &Path, offset: u64, data: &[u8]) -> Result<u64, CommandError> {
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .await
-        .map_err(|error| {
-            CommandError::InternalServerError(format!("Failed to open staged file: {error}"))
-        })?;
-    let current_len = file
-        .metadata()
-        .await
-        .map_err(|error| {
-            CommandError::InternalServerError(format!("Failed to stat staged file: {error}"))
-        })?
-        .len();
-    if current_len != offset {
-        return Err(CommandError::BadRequest(format!(
-            "File staging offset mismatch: expected {current_len}, got {offset}"
-        )));
-    }
-    file.write_all(data).await.map_err(|error| {
-        CommandError::InternalServerError(format!("Failed to write file staging chunk: {error}"))
-    })?;
-    // Tokio file writes complete on the blocking pool. Flush the same handle before
-    // acknowledging bytes that the next command must be able to observe.
-    file.flush().await.map_err(|error| {
-        CommandError::InternalServerError(format!("Failed to flush file staging chunk: {error}"))
-    })?;
-    Ok(offset + data.len() as u64)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn staged_chunks_append_only_at_the_current_length() {
-        let path = std::env::temp_dir().join(format!(
-            "tt-server-staging-{}.bin",
-            uuid::Uuid::new_v4().simple()
-        ));
-        fs::File::create(&path).await.unwrap();
-
-        let rejected = append_staged_chunk(&path, 1, b"early").await;
-        assert!(matches!(rejected, Err(CommandError::BadRequest(message))
-            if message == "File staging offset mismatch: expected 0, got 1"));
-        assert_eq!(fs::metadata(&path).await.unwrap().len(), 0);
-
-        assert_eq!(append_staged_chunk(&path, 0, b"abc").await.unwrap(), 3);
-        // A replayed frame is refused rather than appended twice.
-        assert!(append_staged_chunk(&path, 0, b"abc").await.is_err());
-        assert_eq!(append_staged_chunk(&path, 3, b"de").await.unwrap(), 5);
-        assert_eq!(fs::read(&path).await.unwrap(), b"abcde");
-
-        let _ = fs::remove_file(&path).await;
-    }
 }

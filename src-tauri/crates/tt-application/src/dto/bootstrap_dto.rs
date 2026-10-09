@@ -5,6 +5,7 @@ use crate::dto::group_dto::GroupDto;
 use crate::dto::secret_dto::SecretStateDto;
 use tt_domain::ios_policy::IosPolicyActivationReport;
 
+/// Complete startup snapshot. A failed domain read must reject the request, not supply defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapMetadataDto {
     pub characters: Vec<CharacterDto>,

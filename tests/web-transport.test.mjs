@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWebTransport } from '../src/web/transport.js';
+import { createAgentRunLiveSubscribe } from '../src/tauri/main/api/agent-run-live-subscription.js';
 import { gunzipSync } from 'node:zlib';
 import { installHostIdentity } from './helpers/host-identity.mjs';
 import { createRouteRegistry } from '../src/tauri/main/router.js';
@@ -54,6 +55,32 @@ function harness() {
     return { transport, calls, errors, states, streams, timers, reset, streamReady: streamReady.promise, ready,
         reply: handler => { reply = handler; } };
 }
+
+test('live projection receives replay after the HTTP subscription finishes, until its Channel ends', async () => {
+    const h = harness();
+    const stream = await h.ready();
+    const entered = Promise.withResolvers(), confirmed = Promise.withResolvers();
+    h.reply(init => { entered.resolve(JSON.parse(init.body)); return confirmed.promise; });
+    const updates = [];
+    const subscribe = createAgentRunLiveSubscribe({
+        safeInvoke: h.transport.invoke, channelFactory: h.transport.createChannel,
+    });
+    const unsubscribe = subscribe('run-live', update => updates.push(update));
+    const request = await entered.promise;
+    stream.onerror();
+    confirmed.resolve(Response.json(null));
+    await new Promise(resolve => setImmediate(resolve));
+    h.timers.shift()();
+    const resumed = h.streams.at(-1);
+    resumed.frame({ type: 'ready', sessionId: 'session-1' });
+    const snapshot = { type: 'snapshot', calls: [], responses: [] };
+    resumed.frame({ type: 'channel', channelId: request.args.channel.$channel, sequence: 0, payload: snapshot }, '0');
+    resumed.frame({ type: 'channel-end', channelId: request.args.channel.$channel }, '1');
+    assert.deepEqual(updates, [snapshot]);
+    assert.deepEqual(h.errors, []);
+    assert.equal(h.calls.filter(call => call.url === '/__tt/invoke').length, 1, 'never repeats the subscribe');
+    unsubscribe();
+});
 
 test('invoke waits for ready, keeps DTOs intact and sends same-origin session CSRF', async () => {
     const h = harness();

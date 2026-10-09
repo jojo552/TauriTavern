@@ -88,15 +88,7 @@ pub async fn validate_staged_path(
 }
 
 pub async fn discard_file(path: &Path) -> Result<(), DomainError> {
-    match fs::remove_file(path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(DomainError::file_io(
-            "Remove staged file",
-            path.display().to_string(),
-            error,
-        )),
-    }
+    tt_adapter_storage_core::staged_file::discard(path).await
 }
 
 pub async fn clear_staging_root(app: &AppHandle) -> Result<(), DomainError> {

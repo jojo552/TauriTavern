@@ -602,22 +602,32 @@ async fn host_command(
                 services.avatar_service.get_avatars(),
                 services.secret_service.read_secret_state(),
             );
-            // Same policy as the native command: characters are startup-critical, the rest degrade
-            // to locally unavailable after their user-visible error.
-            let groups = groups.map(|groups| groups.into_iter().map(GroupDto::from).collect()).unwrap_or_else(|error| {
-                tracing::error!(target: tt_contracts::observability::USER_VISIBLE_ERROR, "Failed to load bootstrap groups snapshot: {error}");
-                Vec::new()
-            });
-            let avatars = avatars.unwrap_or_else(|error| {
-                tracing::error!(target: tt_contracts::observability::USER_VISIBLE_ERROR, "Failed to load bootstrap avatars snapshot: {error}");
-                Vec::new()
-            });
-            let secret_state = secret_state.unwrap_or_else(|error| {
-                tracing::error!(target: tt_contracts::observability::USER_VISIBLE_ERROR, "Failed to load bootstrap secret state snapshot: {error}");
-                Default::default()
-            });
+            // Same complete startup snapshot as the native command. Propagate the domain error
+            // to the caller; logging it and returning an empty domain would claim a false success.
+            let characters = characters.map_err(|error| {
+                CommandError::InternalServerError(format!(
+                    "Failed to load bootstrap characters snapshot: {error}"
+                ))
+            })?;
+            let groups = groups
+                .map(|groups| groups.into_iter().map(GroupDto::from).collect())
+                .map_err(|error| {
+                    CommandError::InternalServerError(format!(
+                        "Failed to load bootstrap groups snapshot: {error}"
+                    ))
+                })?;
+            let avatars = avatars.map_err(|error| {
+                CommandError::InternalServerError(format!(
+                    "Failed to load bootstrap avatars snapshot: {error}"
+                ))
+            })?;
+            let secret_state = secret_state.map_err(|error| {
+                CommandError::InternalServerError(format!(
+                    "Failed to load bootstrap secret state snapshot: {error}"
+                ))
+            })?;
             to_json(BootstrapMetadataDto {
-                characters: characters?,
+                characters,
                 groups,
                 avatars,
                 secret_state,

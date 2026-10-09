@@ -17,6 +17,7 @@ use crate::services::agent_workspace_lifecycle_service::{
 };
 use crate::services::chat_history_coordinator::ChatHistoryCoordinator;
 use crate::services::hashing::hex_lower;
+use crate::services::skill_service::SkillService;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -27,6 +28,7 @@ use tt_domain::errors::DomainError;
 use tt_domain::json_merge::{merge_json_value, merge_json_value_with_unset};
 use tt_domain::models::character::Character;
 use tt_domain::models::filename::MAX_SANITIZED_FILENAME_BYTES;
+use tt_domain::models::skill::{SkillScope, SkillScopeRetargetRequest};
 use tt_domain::models::world_info::{WORLD_INFO_EXTENSION, sanitize_world_info_name};
 use tt_ports::repositories::character_repository::{CharacterRepository, ImageCrop};
 use tt_ports::repositories::chat_repository::ChatRepository;
@@ -444,8 +446,12 @@ impl CharacterService {
         Ok(result)
     }
 
-    /// Delete a character
-    pub async fn delete_character(&self, dto: DeleteCharacterDto) -> Result<(), ApplicationError> {
+    /// Delete a character, then best-effort cleanup of its linked skills.
+    pub async fn delete_character(
+        &self,
+        dto: DeleteCharacterDto,
+        skill_service: &SkillService,
+    ) -> Result<(), ApplicationError> {
         tracing::debug!("Deleting character: {}", dto.name);
         let _run_guard = self
             .agent_workspace_lifecycle_service
@@ -524,6 +530,25 @@ impl CharacterService {
                 error
             );
         }
+        // The character is already deleted; linked-skill failure must not hide that commit.
+        drop(_run_guard);
+        if let Err(error) = skill_service
+            .delete_skills_for_source(
+                "character",
+                &SkillScope::Character {
+                    character_id: dto.name.clone(),
+                }
+                .label(),
+            )
+            .await
+        {
+            tracing::error!(
+                target: tt_contracts::observability::USER_VISIBLE_ERROR,
+                "Deleted character '{}' but could not delete its linked Agent Skills: {}",
+                dto.name,
+                error
+            );
+        }
         Ok(())
     }
 
@@ -552,6 +577,7 @@ impl CharacterService {
     pub async fn rename_character(
         &self,
         dto: RenameCharacterDto,
+        skill_service: &SkillService,
     ) -> Result<CharacterDto, ApplicationError> {
         self.validate_character_name(&dto.new_name)?;
 
@@ -574,7 +600,38 @@ impl CharacterService {
             .invalidate_character(&dto.new_name)
             .await;
         drop(execution_guard);
-        Ok(CharacterDto::from(character))
+        let renamed = CharacterDto::from(character);
+        let Some(new_character_id) = renamed
+            .avatar
+            .strip_suffix(".png")
+            .filter(|id| !id.is_empty())
+        else {
+            tracing::error!(
+                target: tt_contracts::observability::USER_VISIBLE_ERROR,
+                "Renamed character but could not retarget its linked Agent Skills"
+            );
+            return Ok(renamed);
+        };
+        // Use the stored avatar identity, which can differ from the requested display name.
+        if dto.old_name != new_character_id
+            && let Err(error) = skill_service
+                .retarget_scope(SkillScopeRetargetRequest {
+                    from_scope: SkillScope::Character {
+                        character_id: dto.old_name,
+                    },
+                    to_scope: SkillScope::Character {
+                        character_id: new_character_id.to_string(),
+                    },
+                })
+                .await
+        {
+            tracing::error!(
+                target: tt_contracts::observability::USER_VISIBLE_ERROR,
+                "Renamed character but could not retarget its linked Agent Skills: {}",
+                error
+            );
+        }
+        Ok(renamed)
     }
 
     /// Duplicate a character using upstream file-copy semantics.

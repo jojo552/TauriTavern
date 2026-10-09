@@ -37,7 +37,7 @@
 ### 2.2 就绪信号（Public/Project）
 
 - `window.__TAURITAVERN_MAIN_READY__ : Promise<void>`
-  - 由 `src/tauri/main/bootstrap.js` 写入，表示宿主层初始化已完成（或失败已被捕获并写入 console）。
+  - 由 `src/tauri/main/bootstrap.js` 写入；resolve 只表示宿主初始化成功。拒绝会停止启动并显示独立于主应用的错误面板与重载入口，不留无限加载遮罩。
   - 在 Tauri runtime 下，resolve 前必须完成 Rust `BackendReadiness` 等待，确保首批依赖 `AppState` 的命令不靠 “state not managed” 文本重试作为正常控制流。浏览器宿主须先取得页面 session 并收到匹配的 SSE `ready` 帧；HTTP 服务在接受连接前已完成后端装配。
 - `window.__TAURITAVERN_PERF_READY__ : Promise<unknown> | undefined`
   - 仅在 perf-hud 启用时存在（见第 5 节）。
@@ -216,7 +216,7 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
 
 拦截生效条件（见 `src/tauri/main/bootstrap.js`）：
 
-- 仅在 **Tauri 环境**启用（`bootstrapTauriMain()` 早退保护）。
+- 仅在 **项目宿主**启用（原生 Tauri 或明确的 browser/web 身份，`bootstrapTauriMain()` 使用 `isProjectHost()` 早退保护）。
 - 仅拦截 **same-origin** 请求（包含被 patch 的同源 iframe/window）。
 - 是否接管由 `router.canHandle(method, pathname)` 决定（仅看 `url.pathname`）。
 

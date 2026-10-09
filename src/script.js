@@ -407,6 +407,7 @@ import { MessageFormatter } from './scripts/message-formatter.js';
 import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
 import { createStartupStatusOverlay } from './scripts/tauri/startup/startup-status-overlay.js';
+import { showStartupError } from './startup-error.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 
 // API OBJECT FOR EXTERNAL WIRING
@@ -1091,7 +1092,8 @@ async function fetchBootstrapMetadata() {
     });
 
     if (!response.ok) {
-        throw new Error(`Bootstrap metadata request failed with status ${response.status}`);
+        const detail = await response.text();
+        throw new Error(`Bootstrap metadata request failed with status ${response.status}: ${detail}`);
     }
 
     return response.json();
@@ -1181,8 +1183,10 @@ async function firstLoadInit() {
 
         setStage('core', t`Starting: loading core data…`);
         const clientVersionPromise = getClientVersion();
-        await initSecrets();
-        const [bootstrapMetadata, settingsSnapshot] = await startupDataPromise;
+        const [[bootstrapMetadata, settingsSnapshot]] = await Promise.all([
+            startupDataPromise,
+            initSecrets(),
+        ]);
         if (bootstrapMetadata?.ios_policy?.scope === 'ios') {
             if (!window.__TAURITAVERN__ || typeof window.__TAURITAVERN__ !== 'object') {
                 throw new Error('[TauriTavern][iOSPolicy] Host ABI is unavailable (window.__TAURITAVERN__).');
@@ -1324,6 +1328,10 @@ async function firstLoadInit() {
             }
         })();
 
+    } catch (error) {
+        console.error('TauriTavern: Application startup failed:', error);
+        showStartupError(error);
+        throw error;
     } finally {
         // Disabled, unavailable or failed quick-reply activation must not retain startup data.
         primeQuickReplyPresetsSnapshot(null);
