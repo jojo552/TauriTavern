@@ -82,6 +82,12 @@ enum ChatCommitOperationDto {
     },
 }
 
+/// A finish request that decoded completely; only then does the page give up its commit.
+struct Finish {
+    id: String,
+    expected_size: u64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenColdChatResult {
@@ -169,6 +175,18 @@ impl SessionResources {
                 "Commit session is not open in this page".into(),
             )),
         }
+    }
+
+    /// Decodes a finish request, then claims its commit. A request that does not decode is not a
+    /// finish attempt: the commit stays owned, so the page can still abort it and closing the page
+    /// reclaims it. Claiming before decoding would orphan the commit's shared receiving slot.
+    fn claim_finish(&self, kind: CommitKind, a: &Args) -> Result<Finish, CommandError> {
+        let finish = Finish {
+            id: a.get("sessionId")?,
+            expected_size: a.get("expectedSize")?,
+        };
+        self.take_commit(kind, &finish.id)?;
+        Ok(finish)
     }
 
     /// Finish and abort consume the commit whatever the service outcome, matching byte-commit.js.
@@ -371,13 +389,13 @@ impl SessionResources {
                 .await?
             }
             "finish_chat_commit" => {
-                let id: String = a.get("sessionId")?;
-                self.take_commit(CommitKind::Chat, &id)?;
+                // Part of the request, so it decodes before the commit is claimed.
                 let reason: CurrentCommitReason = a.get("commitReason")?;
+                let finish = self.claim_finish(CommitKind::Chat, &a)?;
                 json(
                     services
                         .chat_commit_service
-                        .finish(&id, a.get("expectedSize")?, reason)
+                        .finish(&finish.id, finish.expected_size, reason)
                         .await?,
                 )?
             }
@@ -396,12 +414,11 @@ impl SessionResources {
                 .await?
             }
             "finish_settings_commit" => {
-                let id: String = a.get("sessionId")?;
-                self.take_commit(CommitKind::Settings, &id)?;
+                let finish = self.claim_finish(CommitKind::Settings, &a)?;
                 json(
                     services
                         .settings_service
-                        .finish_commit(&id, a.get("expectedSize")?)
+                        .finish_commit(&finish.id, finish.expected_size)
                         .await?,
                 )?
             }
@@ -419,12 +436,11 @@ impl SessionResources {
                 .await?
             }
             "finish_world_info_commit" => {
-                let id: String = a.get("sessionId")?;
-                self.take_commit(CommitKind::WorldInfo, &id)?;
+                let finish = self.claim_finish(CommitKind::WorldInfo, &a)?;
                 json(
                     services
                         .world_info_service
-                        .finish_commit(&id, a.get("expectedSize")?)
+                        .finish_commit(&finish.id, finish.expected_size)
                         .await?,
                 )?
             }
@@ -451,12 +467,11 @@ impl SessionResources {
                 .await?
             }
             "finish_extension_store_commit" => {
-                let id: String = a.get("sessionId")?;
-                self.take_commit(CommitKind::ExtensionStore, &id)?;
+                let finish = self.claim_finish(CommitKind::ExtensionStore, &a)?;
                 json(
                     services
                         .extension_store_service
-                        .finish_commit(&id, a.get("expectedSize")?)
+                        .finish_commit(&finish.id, finish.expected_size)
                         .await?,
                 )?
             }
@@ -616,6 +631,26 @@ mod tests {
         assert!(resources.owned_commit(CommitKind::Chat, "guessed").is_err());
         resources.take_commit(CommitKind::Chat, "a").unwrap();
         assert!(resources.take_commit(CommitKind::Chat, "a").is_err());
+    }
+
+    #[test]
+    fn a_finish_that_does_not_decode_leaves_the_commit_owned_for_abort() {
+        let resources = SessionResources::default();
+        resources
+            .register_commit(CommitKind::Settings, &begin("a"))
+            .unwrap();
+        // Missing expectedSize: rejected without consuming the page's ownership.
+        let malformed = Args(serde_json::json!({ "sessionId": "a" }));
+        assert!(matches!(
+            resources.claim_finish(CommitKind::Settings, &malformed),
+            Err(CommandError::BadRequest(_))
+        ));
+        assert!(resources.owned_commit(CommitKind::Settings, "a").is_ok());
+
+        let finish = Args(serde_json::json!({ "sessionId": "a", "expectedSize": 2 }));
+        let claimed = resources.claim_finish(CommitKind::Settings, &finish).unwrap();
+        assert_eq!((claimed.id.as_str(), claimed.expected_size), ("a", 2));
+        assert!(resources.owned_commit(CommitKind::Settings, "a").is_err());
     }
 
     #[test]
