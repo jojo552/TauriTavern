@@ -311,7 +311,8 @@ mod tests {
         }
 
         async fn user_file_exists(&self, relative_path: &Path) -> Result<bool, DomainError> {
-            Ok(self.writes
+            Ok(self
+                .writes
                 .lock()
                 .expect("writes lock")
                 .iter()
@@ -358,30 +359,58 @@ mod tests {
     async fn user_files_preserve_attachment_contract_and_reject_invalid_uploads() {
         let store = Arc::new(FakeStore::default());
         let service = UserMediaService::new(store.clone());
-        let result = service.upload_user_file(" notes.txt ", &BASE64_STANDARD.encode(b"old")).await.expect("upload");
+        let result = service
+            .upload_user_file(" notes.txt ", &BASE64_STANDARD.encode(b"old"))
+            .await
+            .expect("upload");
         assert_eq!(result.path, "/user/files/notes.txt");
-        assert!(service.upload_user_file("notes.txt", "not base64!").await.is_err());
+        assert!(
+            service
+                .upload_user_file("notes.txt", "not base64!")
+                .await
+                .is_err()
+        );
         assert!(service.upload_user_file("payload.JS", "").await.is_err());
         assert!(service.upload_user_file("../notes.txt", "").await.is_err());
-        assert_eq!(*store.writes.lock().expect("writes lock"), vec![(PathBuf::from("notes.txt"), b"old".to_vec())]);
+        for name in ["trailing.", "CON.txt", &"x".repeat(256)] {
+            assert!(matches!(service.upload_user_file(name, "").await, Err(DomainError::InvalidData(_))));
+        }
+        assert_eq!(
+            *store.writes.lock().expect("writes lock"),
+            vec![(PathBuf::from("notes.txt"), b"old".to_vec())]
+        );
 
         let urls = [
             "/user/files/notes.txt",
+            "/user/files/%6Eotes.txt",
             "https://host.invalid/user/files/notes.txt?download=1#fragment",
             "user\\files\\notes.txt",
             "/user/files/missing.txt",
             "/user/images/notes.txt",
             "/user/files/../private.txt",
+            "/user/files/%2e%2e/private.txt",
+            "/user/files/notes%2Fprivate.txt",
             "",
-        ].map(str::to_owned).to_vec();
-        let verified = service.verify_user_files(urls.clone()).await.expect("verify");
-        assert_eq!(verified.len(), 4);
-        for url in &urls[..3] {
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let verified = service
+            .verify_user_files(urls.clone())
+            .await
+            .expect("verify");
+        assert_eq!(verified.len(), 5);
+        for url in &urls[..4] {
             assert_eq!(verified.get(url), Some(&true));
         }
-        assert_eq!(verified.get(&urls[3]), Some(&false));
-        service.delete_user_file(&urls[1]).await.expect("delete URL");
-        assert_eq!(*store.deleted.lock().expect("deleted lock"), vec![PathBuf::from("notes.txt")]);
+        assert_eq!(verified.get(&urls[4]), Some(&false));
+        service
+            .delete_user_file(&urls[1])
+            .await
+            .expect("delete URL");
+        assert_eq!(
+            *store.deleted.lock().expect("deleted lock"),
+            vec![PathBuf::from("notes.txt")]
+        );
     }
 
     #[tokio::test]

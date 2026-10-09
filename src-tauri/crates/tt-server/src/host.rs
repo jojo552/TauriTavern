@@ -783,7 +783,9 @@ mod tests {
 
         let response = send("gzip", gzip(&[b'a'; 1000])).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 64).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 64)
+            .await
+            .unwrap();
         assert_eq!(&body[..], b"1000");
         // A small compressed body that expands past the limit fails instead of being buffered.
         let response = send("gzip", gzip(&[b'a'; 1025])).await.unwrap();

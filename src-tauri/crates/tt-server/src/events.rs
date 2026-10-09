@@ -349,13 +349,18 @@ mod tests {
         for sender in senders {
             sender.join().unwrap();
         }
-        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         let sequences: Vec<u64> = runtime
             .block_on(frames(&mut stream, SENDERS * PER_SENDER))
             .iter()
             .map(|(_, frame)| frame["sequence"].as_u64().unwrap())
             .collect();
-        assert_eq!(sequences, (0..(SENDERS * PER_SENDER) as u64).collect::<Vec<_>>());
+        assert_eq!(
+            sequences,
+            (0..(SENDERS * PER_SENDER) as u64).collect::<Vec<_>>()
+        );
     }
 
     /// A dropped connection resumes from the page's last received frame: nothing it saw is

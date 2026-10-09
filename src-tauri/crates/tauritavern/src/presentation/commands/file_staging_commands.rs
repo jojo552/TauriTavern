@@ -111,7 +111,9 @@ pub async fn stage_file_chunk(
     let offset = chunk_offset_from_request(&request)?;
     let data = chunk_bytes_from_request(&request)?;
     let path = validate_staged_path(&app, &file_path).await?;
-    staged_file::append(&path, offset, &data).await.map_err(CommandError::from)
+    staged_file::append(&path, offset, &data)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]

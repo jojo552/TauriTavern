@@ -149,9 +149,7 @@ async fn linked_skill_failure_preserves_character_success_but_fails_preset_delet
         .unwrap();
     let skill_root = root.join("skills");
     let skills = SkillService::new(Arc::new(FileSkillRepository::new(skill_root.clone())));
-    fs::create_dir_all(skill_root.join("index"))
-        .await
-        .unwrap();
+    fs::create_dir_all(skill_root.join("index")).await.unwrap();
     fs::write(skill_root.join("index/skills.json"), b"not json")
         .await
         .unwrap();

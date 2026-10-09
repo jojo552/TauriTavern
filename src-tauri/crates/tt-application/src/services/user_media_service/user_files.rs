@@ -1,6 +1,6 @@
 //! User-file attachment policy shared by the native and browser command boundaries.
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use serde::Serialize;
@@ -8,81 +8,8 @@ use tt_domain::errors::DomainError;
 use url::Url;
 
 use super::{BASE64_STANDARD, UserMediaService};
-
-const UNSAFE_EXTENSIONS: &[&str] = &[
-    ".php",
-    ".exe",
-    ".com",
-    ".dll",
-    ".pif",
-    ".application",
-    ".gadget",
-    ".msi",
-    ".jar",
-    ".cmd",
-    ".bat",
-    ".reg",
-    ".sh",
-    ".py",
-    ".js",
-    ".jse",
-    ".jsp",
-    ".pdf",
-    ".html",
-    ".htm",
-    ".hta",
-    ".vb",
-    ".vbs",
-    ".vbe",
-    ".cpl",
-    ".msc",
-    ".scr",
-    ".sql",
-    ".iso",
-    ".img",
-    ".dmg",
-    ".ps1",
-    ".ps1xml",
-    ".ps2",
-    ".ps2xml",
-    ".psc1",
-    ".psc2",
-    ".msh",
-    ".msh1",
-    ".msh2",
-    ".mshxml",
-    ".msh1xml",
-    ".msh2xml",
-    ".scf",
-    ".lnk",
-    ".inf",
-    ".doc",
-    ".docm",
-    ".docx",
-    ".dot",
-    ".dotm",
-    ".dotx",
-    ".xls",
-    ".xlsm",
-    ".xlsx",
-    ".xlt",
-    ".xltm",
-    ".xltx",
-    ".xlam",
-    ".ppt",
-    ".pptm",
-    ".pptx",
-    ".pot",
-    ".potm",
-    ".potx",
-    ".ppam",
-    ".ppsx",
-    ".ppsm",
-    ".pps",
-    ".sldx",
-    ".sldm",
-    ".ws",
-];
+use crate::client_asset_paths::{UserDataAssetKind, parse_user_data_asset_request_path};
+use crate::services::asset_service::validate_asset_file_name;
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct UserFileUploadResult {
@@ -134,98 +61,25 @@ impl UserMediaService {
     }
 }
 
-// Preserve native reference semantics: absolute URLs use their path, backslashes
-// are separators, and percent escapes are not decoded into filesystem components.
-fn normalize_relative_path(raw: &str) -> Result<PathBuf, DomainError> {
-    let normalized = String::from(raw)
-        .replace('\\', "/")
-        .trim()
-        .trim_start_matches('/')
-        .to_string();
-
-    if normalized.is_empty() {
-        return Err(DomainError::InvalidData(
-            "File path cannot be empty".to_string(),
-        ));
+/// Attachment URLs name the same file that the browser resource route serves. Decode and
+/// validate one segment at a time via that route's parser, never decode a whole filesystem path.
+fn normalize_user_file_reference(raw: &str) -> Result<PathBuf, DomainError> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(DomainError::InvalidData("No path specified".into()));
     }
-
-    let mut path = PathBuf::new();
-    for component in Path::new(&normalized).components() {
-        match component {
-            Component::Normal(segment) => path.push(segment),
-            _ => {
-                return Err(DomainError::InvalidData("Invalid file path".to_string()));
-            }
-        }
+    let path = Url::parse(value).map_or_else(|_| value.to_owned(), |url| url.path().to_owned());
+    let path = format!("/{}", path.replace('\\', "/").trim_start_matches('/'));
+    match parse_user_data_asset_request_path(&path) {
+        Ok(Some(parsed)) if parsed.kind == UserDataAssetKind::UserFile => Ok(parsed.relative_path),
+        _ => Err(DomainError::InvalidData("Invalid path".into())),
     }
-
-    if path.as_os_str().is_empty() {
-        return Err(DomainError::InvalidData(
-            "File path cannot be empty".to_string(),
-        ));
-    }
-
-    Ok(path)
 }
 
 fn validate_upload_name(raw: &str) -> Result<String, DomainError> {
-    let name = String::from(raw).trim().to_string();
+    let name = raw.trim();
     if name.is_empty() {
-        return Err(DomainError::InvalidData(
-            "No upload name specified".to_string(),
-        ));
+        return Err(DomainError::InvalidData("No upload name specified".into()));
     }
-
-    if name.starts_with('.') {
-        return Err(DomainError::InvalidData(
-            "Filename cannot start with '.'".to_string(),
-        ));
-    }
-
-    if name.contains('/') || name.contains('\\') {
-        return Err(DomainError::InvalidData(
-            "Illegal character in filename".to_string(),
-        ));
-    }
-
-    if !name
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.')
-    {
-        return Err(DomainError::InvalidData(
-            "Illegal character in filename; only alphanumeric, '_', '-' are accepted.".to_string(),
-        ));
-    }
-
-    let extension = Path::new(&name)
-        .extension()
-        .map(|ext| format!(".{}", ext.to_string_lossy().to_lowercase()))
-        .unwrap_or_default();
-
-    if UNSAFE_EXTENSIONS.contains(&extension.as_str()) {
-        return Err(DomainError::InvalidData(
-            "Forbidden file extension.".to_string(),
-        ));
-    }
-
-    Ok(name)
-}
-
-fn normalize_user_file_reference(raw: &str) -> Result<PathBuf, DomainError> {
-    let mut value = String::from(raw).trim().to_string();
-    if value.is_empty() {
-        return Err(DomainError::InvalidData("No path specified".to_string()));
-    }
-
-    if let Ok(parsed_url) = Url::parse(&value) {
-        value = parsed_url.path().to_string();
-    }
-
-    let normalized = value.replace('\\', "/");
-    let without_leading = normalized.trim_start_matches('/');
-    let relative = without_leading
-        .strip_prefix("user/files/")
-        .ok_or_else(|| DomainError::InvalidData("Invalid path".to_string()))?;
-
-    normalize_relative_path(relative)
+    validate_asset_file_name(name)
 }

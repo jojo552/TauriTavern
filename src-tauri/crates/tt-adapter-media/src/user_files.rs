@@ -30,7 +30,9 @@ impl FilesystemUserFiles {
         // Walk before creating: create_dir_all would follow an existing directory symlink.
         // The configured data root is trusted; every descendant belongs to confinement.
         let files_directory = UserDirectory::default_user(&root).files;
-        let relative_root = files_directory.strip_prefix(&root).map_err(|_| invalid_path())?;
+        let relative_root = files_directory
+            .strip_prefix(&root)
+            .map_err(|_| invalid_path())?;
         for segment in relative_root.components() {
             root.push(segment);
             match fs::create_dir(&root).await {
@@ -66,7 +68,9 @@ impl FilesystemUserFiles {
 
     async fn resolve(&self, relative: &Path) -> Result<PathBuf, DomainError> {
         if relative.as_os_str().is_empty()
-            || relative.components().any(|part| !matches!(part, Component::Normal(_)))
+            || relative
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
         {
             return Err(invalid_path());
         }
@@ -118,12 +122,14 @@ impl FilesystemUserFiles {
             persist_file(file, &temp, &target).await
         }
         .await;
-        if result.is_err() {
-            if let Err(error) = fs::remove_file(&temp).await {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!("Failed to remove user-file staging {}: {error}", temp.display());
-                }
-            }
+        if result.is_err()
+            && let Err(error) = fs::remove_file(&temp).await
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                "Failed to remove user-file staging {}: {error}",
+                temp.display()
+            );
         }
         result
     }
@@ -156,8 +162,15 @@ async fn is_file(path: &Path) -> Result<bool, DomainError> {
             if matches!(
                 error.kind(),
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) => Ok(false),
-        Err(error) => Err(DomainError::file_io("Stat user file", path.display().to_string(), error)),
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(DomainError::file_io(
+            "Stat user file",
+            path.display().to_string(),
+            error,
+        )),
     }
 }
 
@@ -194,11 +207,18 @@ mod tests {
         files.write(relative, b"old").await.expect("first upload");
         files.write(relative, b"new").await.expect("replace upload");
         assert_eq!(
-            fs::read(root.0.join("default-user/user/files/notes.txt")).await.expect("read"),
+            fs::read(root.0.join("default-user/user/files/notes.txt"))
+                .await
+                .expect("read"),
             b"new",
         );
         assert!(files.exists(relative).await.expect("exists"));
-        assert!(!files.exists(Path::new("missing.txt")).await.expect("missing"));
+        assert!(
+            !files
+                .exists(Path::new("missing.txt"))
+                .await
+                .expect("missing")
+        );
         assert!(matches!(
             files.write(Path::new("../outside.txt"), b"bad").await,
             Err(DomainError::InvalidData(_)),
@@ -208,16 +228,28 @@ mod tests {
         // Its contents must survive, and the failed staging file must be removed.
         let blocked = root.0.join("default-user/user/files/blocked.txt");
         fs::create_dir(&blocked).await.expect("blocking directory");
-        fs::write(blocked.join("keep"), b"keep").await.expect("existing contents");
+        fs::write(blocked.join("keep"), b"keep")
+            .await
+            .expect("existing contents");
         assert!(files.write(Path::new("blocked.txt"), b"bad").await.is_err());
-        assert_eq!(fs::read(blocked.join("keep")).await.expect("retained contents"), b"keep");
-        let mut entries = fs::read_dir(blocked.parent().expect("parent")).await.expect("list");
+        assert_eq!(
+            fs::read(blocked.join("keep"))
+                .await
+                .expect("retained contents"),
+            b"keep"
+        );
+        let mut entries = fs::read_dir(blocked.parent().expect("parent"))
+            .await
+            .expect("list");
         while let Some(entry) = entries.next_entry().await.expect("entry") {
             assert!(!entry.file_name().to_string_lossy().ends_with(".tmp"));
         }
         files.delete(relative).await.expect("delete");
         assert!(!files.exists(relative).await.expect("deleted"));
-        assert!(matches!(files.delete(relative).await, Err(DomainError::NotFound(_))));
+        assert!(matches!(
+            files.delete(relative).await,
+            Err(DomainError::NotFound(_))
+        ));
     }
 
     #[cfg(unix)]
@@ -225,7 +257,9 @@ mod tests {
     async fn symlink_files_directories_and_user_roots_cannot_escape_confinement() {
         let root = TempRoot::new();
         let outside = TempRoot::new();
-        fs::write(outside.0.join("notes.txt"), b"outside").await.expect("outside file");
+        fs::write(outside.0.join("notes.txt"), b"outside")
+            .await
+            .expect("outside file");
         let files = FilesystemUserFiles::new(&root.0);
         files.root().await.expect("root");
         let files_root = root.0.join("default-user/user/files");
@@ -233,14 +267,34 @@ mod tests {
             .expect("file link");
         std::os::unix::fs::symlink(&outside.0, files_root.join("linked")).expect("directory link");
         for relative in [Path::new("notes.txt"), Path::new("linked/notes.txt")] {
-            assert!(matches!(files.write(relative, b"bad").await, Err(DomainError::InvalidData(_))));
-            assert!(matches!(files.exists(relative).await, Err(DomainError::InvalidData(_))));
-            assert!(matches!(files.delete(relative).await, Err(DomainError::InvalidData(_))));
+            assert!(matches!(
+                files.write(relative, b"bad").await,
+                Err(DomainError::InvalidData(_))
+            ));
+            assert!(matches!(
+                files.exists(relative).await,
+                Err(DomainError::InvalidData(_))
+            ));
+            assert!(matches!(
+                files.delete(relative).await,
+                Err(DomainError::InvalidData(_))
+            ));
         }
-        assert_eq!(fs::read(outside.0.join("notes.txt")).await.expect("outside preserved"), b"outside");
-        std::os::unix::fs::symlink(outside.0.join("missing.txt"), files_root.join("dangling.txt"))
-            .expect("dangling link");
-        assert!(matches!(files.exists(Path::new("dangling.txt")).await, Err(DomainError::InvalidData(_))));
+        assert_eq!(
+            fs::read(outside.0.join("notes.txt"))
+                .await
+                .expect("outside preserved"),
+            b"outside"
+        );
+        std::os::unix::fs::symlink(
+            outside.0.join("missing.txt"),
+            files_root.join("dangling.txt"),
+        )
+        .expect("dangling link");
+        assert!(matches!(
+            files.exists(Path::new("dangling.txt")).await,
+            Err(DomainError::InvalidData(_))
+        ));
 
         for linked_root in [
             Path::new("default-user"),
@@ -249,10 +303,15 @@ mod tests {
         ] {
             let data_root = TempRoot::new();
             let link = data_root.0.join(linked_root);
-            fs::create_dir_all(link.parent().expect("parent")).await.expect("parent directory");
+            fs::create_dir_all(link.parent().expect("parent"))
+                .await
+                .expect("parent directory");
             std::os::unix::fs::symlink(&outside.0, link).expect("root link");
             let store = FilesystemUserFiles::new(&data_root.0);
-            assert!(matches!(store.write(Path::new("notes.txt"), b"bad").await, Err(DomainError::InvalidData(_))));
+            assert!(matches!(
+                store.write(Path::new("notes.txt"), b"bad").await,
+                Err(DomainError::InvalidData(_))
+            ));
         }
     }
 }

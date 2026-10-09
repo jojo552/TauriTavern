@@ -87,7 +87,10 @@ mod tests {
         }
 
         async fn new_in(parent: &Path) -> Self {
-            let root = parent.join(format!("tt-startup-paths-{}", uuid::Uuid::new_v4().simple()));
+            let root = parent.join(format!(
+                "tt-startup-paths-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
             for name in ["web", "resources", "state"] {
                 fs::create_dir_all(root.join(name)).await.unwrap();
             }
@@ -113,10 +116,7 @@ mod tests {
         let paths = fixture.resolve(&app, &app.join("data")).await.unwrap();
         assert_eq!(paths.app_root, fs::canonicalize(&app).await.unwrap());
         let files = crate::files::HostFiles::new(&paths.app_root).await.unwrap();
-        let staged = files
-            .create_staged_file("avatar", "png")
-            .await
-            .unwrap();
+        let staged = files.create_staged_file("avatar", "png").await.unwrap();
         assert!(staged.is_absolute());
         assert_eq!(
             files
