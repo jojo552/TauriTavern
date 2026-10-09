@@ -1,0 +1,29 @@
+[package]
+name = "tt-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time", "macros"] }
+tracing = "0.1"
+tt-contracts = { path = "../tt-contracts" }
+uuid = { workspace = true }
+tt-application = { path = "../tt-application" }
+tt-domain = { path = "../tt-domain" }
+tt-ports = { path = "../tt-ports" }
+tt-adapter-extension = { path = "../tt-adapter-extension" }
+tt-adapter-http = { path = "../tt-adapter-http" }
+tt-adapter-media = { path = "../tt-adapter-media" }
+tt-adapter-mcp = { path = "../tt-adapter-mcp" }
+tt-adapter-provider-http = { path = "../tt-adapter-provider-http" }
+tt-adapter-storage-core = { path = "../tt-adapter-storage-core" }
+tt-adapter-storage-userdata = { path = "../tt-adapter-storage-userdata" }
+tt-adapter-tokenization = { path = "../tt-adapter-tokenization" }
+tt-adapter-triviumdb = { path = "../tt-adapter-triviumdb" }
+tt-adapter-vector = { path = "../tt-adapter-vector" }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

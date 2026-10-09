@@ -1,3 +1,4 @@
+pub mod bundled_resources;
 pub mod chat_directory_identity;
 mod chat_format_importers;
 mod chat_jsonl;
@@ -8,11 +9,12 @@ pub mod preset_file_naming;
 pub mod repositories;
 pub mod sillytavern_sorting;
 
-pub use file_system::DataDirectory;
+pub use bundled_resources::DirectoryBundledResources;
+pub use file_system::{DataDirectory, DataDirectoryDataRootInitializer};
 pub use repositories::{
-    FileAssetRepository, FileChatRepository, FileExtensionStoreRepository, FileGroupRepository,
-    FileLlmConnectionRepository, FileMcpServerRepository, FilePromptCacheRepository,
-    FileQuickReplyRepository, FileSecretRepository, FileSettingsRepository, FileThemeRepository,
-    FileUserDirectoryRepository, FileUserEndpointGrantRepository, FileUserRepository,
-    load_tauritavern_settings_blocking,
+    FileAssetRepository, FileChatRepository, FileContentRepository, FileExtensionStoreRepository,
+    FileGroupRepository, FileLlmConnectionRepository, FileMcpServerRepository,
+    FilePresetRepository, FilePromptCacheRepository, FileQuickReplyRepository,
+    FileSecretRepository, FileSettingsRepository, FileThemeRepository, FileUserDirectoryRepository,
+    FileUserEndpointGrantRepository, FileUserRepository, load_tauritavern_settings_blocking,
 };

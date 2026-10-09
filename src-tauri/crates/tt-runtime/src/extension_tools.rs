@@ -1,22 +1,27 @@
+//! Page-owned agent extension tools, shared by every host.
+//!
+//! A page registers tools and receives calls through an [`ExtensionToolEventSink`] supplied by its
+//! host. The owner is an opaque page identity (a WebView label, a browser page session) used to
+//! keep one page from resolving or disabling another page's tools.
+
 use std::collections::{HashMap, hash_map::Entry};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tauri::ipc::Channel;
 use tokio::sync::{oneshot, watch};
 use tt_contracts::extension_tools::{
     ExtensionTool, ExtensionToolCall, ExtensionToolDefinition, ExtensionToolEvent,
     ExtensionToolReply,
 };
 use tt_domain::{errors::DomainError, models::tool::ToolId};
-use tt_ports::extension_tools::ExtensionTools;
+use tt_ports::extension_tools::{ExtensionToolEventSink, ExtensionTools};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct Registration {
     tool: ExtensionTool,
-    channel: Channel<ExtensionToolEvent>,
+    sink: Arc<dyn ExtensionToolEventSink>,
     owner: String,
 }
 
@@ -31,18 +36,18 @@ struct BridgeState {
     pending: HashMap<String, PendingCall>,
 }
 
-/// Page-owned callbacks and their outstanding IPC receipts. Tool policy stays in application.
+/// Page-owned callbacks and their outstanding receipts. Tool policy stays in application.
 #[derive(Default)]
-pub(crate) struct AgentExtensionTools {
+pub struct AgentExtensionTools {
     state: Mutex<BridgeState>,
 }
 
 impl AgentExtensionTools {
-    pub(crate) fn register(
+    pub fn register(
         &self,
         owner: &str,
         definition: ExtensionToolDefinition,
-        channel: Channel<ExtensionToolEvent>,
+        sink: Arc<dyn ExtensionToolEventSink>,
     ) -> Result<ToolId, DomainError> {
         let tool = definition.into_tool()?;
         let id = tool.descriptor.id.clone();
@@ -54,7 +59,7 @@ impl AgentExtensionTools {
             Entry::Vacant(entry) => {
                 entry.insert(Registration {
                     tool,
-                    channel,
+                    sink,
                     owner: owner.to_owned(),
                 });
                 Ok(id)
@@ -62,7 +67,7 @@ impl AgentExtensionTools {
         }
     }
 
-    pub(crate) fn set_enabled(
+    pub fn set_enabled(
         &self,
         owner: &str,
         tool_id: &ToolId,
@@ -82,12 +87,7 @@ impl AgentExtensionTools {
         Ok(())
     }
 
-    pub(crate) fn resolve(
-        &self,
-        owner: &str,
-        request_id: &str,
-        result: ExtensionToolReply,
-    ) -> bool {
+    pub fn resolve(&self, owner: &str, request_id: &str, result: ExtensionToolReply) -> bool {
         let mut state = self.state.lock().expect("extension tool bridge poisoned");
         if !state
             .pending
@@ -105,7 +105,7 @@ impl AgentExtensionTools {
             .is_ok()
     }
 
-    pub(crate) fn clear_page(&self, owner: &str) {
+    pub fn clear_page(&self, owner: &str) {
         let removed = {
             let mut state = self.state.lock().expect("extension tool bridge poisoned");
             state.pending.retain(|_, pending| pending.owner != owner);
@@ -114,7 +114,7 @@ impl AgentExtensionTools {
                 .extract_if(|_, registration| registration.owner == owner)
                 .collect::<Vec<_>>()
         };
-        // Dropping a Channel can also dispatch to the WebView.
+        // Dropping a sink can dispatch to the page; never do it under the lock.
         drop(removed);
     }
 }
@@ -142,7 +142,7 @@ impl ExtensionTools for AgentExtensionTools {
         }
         let request_id = uuid::Uuid::new_v4().to_string();
         let (sender, receiver) = oneshot::channel();
-        let channel = {
+        let sink = {
             let mut state = self.state.lock().expect("extension tool bridge poisoned");
             let Some(registration) = state
                 .tools
@@ -153,16 +153,16 @@ impl ExtensionTools for AgentExtensionTools {
                     message: "This tool is currently unavailable. No action was taken.".into(),
                 });
             };
-            let channel = registration.channel.clone();
+            let sink = registration.sink.clone();
             let owner = registration.owner.clone();
             state
                 .pending
                 .insert(request_id.clone(), PendingCall { owner, sender });
-            channel
+            sink
         };
 
-        // Channel::send can block on native dispatch and does not confirm JS execution.
-        if let Err(error) = channel.send(ExtensionToolEvent::Call {
+        // Delivery can block on the host transport and does not confirm page execution.
+        if let Err(error) = sink.send(ExtensionToolEvent::Call {
             request_id: request_id.clone(),
             call,
         }) {
@@ -192,9 +192,7 @@ impl ExtensionTools for AgentExtensionTools {
             .expect("extension tool bridge poisoned")
             .pending
             .remove(&request_id);
-        if abort_frontend
-            && let Err(error) = channel.send(ExtensionToolEvent::Cancel { request_id })
-        {
+        if abort_frontend && let Err(error) = sink.send(ExtensionToolEvent::Cancel { request_id }) {
             tracing::warn!("Failed to deliver extension tool cancellation: {error}");
         }
         result
@@ -206,12 +204,20 @@ mod tests {
     use std::sync::Arc;
 
     use serde_json::{Value, json};
-    use tauri::ipc::InvokeResponseBody;
     use tokio::sync::mpsc;
     use tt_contracts::extension_tools::ExtensionToolTarget;
     use tt_domain::models::tool::AgentToolScope;
 
     use super::*;
+
+    struct TestSink(mpsc::UnboundedSender<Value>);
+
+    impl ExtensionToolEventSink for TestSink {
+        fn send(&self, event: ExtensionToolEvent) -> Result<(), String> {
+            let value = serde_json::to_value(event).map_err(|error| error.to_string())?;
+            self.0.send(value).map_err(|error| error.to_string())
+        }
+    }
 
     fn registered_bridge() -> (
         Arc<AgentExtensionTools>,
@@ -220,13 +226,7 @@ mod tests {
     ) {
         let bridge = Arc::new(AgentExtensionTools::default());
         let (sender, receiver) = mpsc::unbounded_channel();
-        let channel = Channel::new(move |body| {
-            let InvokeResponseBody::Json(body) = body else {
-                panic!("expected JSON")
-            };
-            sender.send(serde_json::from_str(&body).unwrap()).unwrap();
-            Ok(())
-        });
+        let sink: Arc<dyn ExtensionToolEventSink> = Arc::new(TestSink(sender));
         let tool_id = bridge
             .register(
                 "main",
@@ -238,7 +238,7 @@ mod tests {
                     contexts: vec![AgentToolScope::Session],
                     enabled: true,
                 },
-                channel,
+                sink,
             )
             .unwrap();
         (bridge, tool_id, receiver)

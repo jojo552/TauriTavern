@@ -46,6 +46,43 @@ function setPermissionRejectionCount(storage, count) {
 }
 
 /**
+ * The browser host has no native notification plugin: the page itself owns the permission and
+ * shows notifications through the Web Notification API. Permission states map one to one
+ * (`default` is the browser's name for `prompt`).
+ *
+ * @param {typeof globalThis.Notification | undefined} BrowserNotification
+ * @returns {SafeInvokeFn}
+ */
+export function createBrowserNotificationInvoke(BrowserNotification = globalThis.Notification) {
+    /** @param {string} permission */
+    const toState = (permission) => (permission === 'default' ? 'prompt' : permission);
+    return async (command, args) => {
+        if (typeof BrowserNotification !== 'function') {
+            // Insecure origins and some embedded browsers have no Notification API at all.
+            if (command === 'show_system_notification') {
+                throw new Error('This browser does not support system notifications');
+            }
+            return 'denied';
+        }
+        switch (command) {
+            case 'get_notification_permission_state':
+                return toState(BrowserNotification.permission);
+            case 'request_notification_permission':
+                return toState(await BrowserNotification.requestPermission());
+            case 'show_system_notification': {
+                if (BrowserNotification.permission !== 'granted') {
+                    throw new Error('Notification permission has not been granted');
+                }
+                new BrowserNotification(args.dto.title, { body: args.dto.body });
+                return null;
+            }
+            default:
+                throw new Error(`Unsupported browser notification command: ${command}`);
+        }
+    };
+}
+
+/**
  * @param {{
  *   safeInvoke: SafeInvokeFn;
  *   confirmPermissionRationale: () => Promise<boolean>;

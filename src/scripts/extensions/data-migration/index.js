@@ -3,6 +3,9 @@ import { t, translate } from '../../i18n.js';
 import { Popup } from '../../popup.js';
 import { getActiveIosPolicyActivationReport } from '../../tauritavern/ios-policy.js';
 import { flushLifecycleState } from '../../../tauri/main/services/lifecycle/lifecycle-flush-service.js';
+import { isWebHost } from '../../../tauri-bridge.js';
+import { createBrowserFileTransfer } from '../../../web/file-transfer.js';
+import { createFileStagingService } from '../../../tauri/main/services/files/file-staging-service.js';
 
 const MODULE_NAME = 'data-migration';
 const JOB_POLL_INTERVAL_MS = 1200;
@@ -58,8 +61,22 @@ function requireJobId(payload, errorMessage) {
     return payload.job_id.trim();
 }
 
-async function startImportJob() {
-    const response = await fetch('/api/extensions/data-migration/import', { method: 'POST' });
+/**
+ * Browser hosts cannot hand a native picker path to the server: the page stages the chosen file
+ * first, then the host imports that staged copy. Native hosts keep their own picker.
+ * @param {File | null} [file]
+ */
+async function startImportJob(file = null) {
+    let body;
+    if (isWebHost()) {
+        if (!file) return null;
+        const stagedPath = await createFileStagingService().stageBlob(file, { kind: 'data-archive', preferredName: file.name });
+        body = JSON.stringify({ staged_path: stagedPath, file_name: file.name });
+    }
+    const response = await fetch('/api/extensions/data-migration/import', {
+        method: 'POST',
+        ...(body ? { headers: { 'Content-Type': 'application/json' }, body } : {}),
+    });
     if (!response.ok) throw new Error(await readFailureMessage(response));
     const payload = await response.json();
     return payload.cancelled ? null : requireJobId(payload, t`Import job id is missing`);
@@ -286,7 +303,7 @@ async function runMigrationJob(kind, startJob) {
                 reloadSoon();
             } else {
                 const saveResult = await saveExportArchive(jobId);
-                if (saveResult.delivered) {
+                if (saveResult.delivered || saveResult.status === 'handed-off') {
                     toastr.success(t`Data archive exported`, t`Export completed`);
                     setStatusText(t`Export completed`);
                 } else {
@@ -329,10 +346,18 @@ async function runMigrationJob(kind, startJob) {
 }
 
 async function runConfirmedImport() {
+    // The browser picker must open inside the click; confirmation follows the selection there.
+    const file = isWebHost()
+        ? (await createBrowserFileTransfer().pickFiles({ kind: 'data-archive' }))?.[0] ?? null
+        : null;
+    if (isWebHost() && !file) {
+        setStatusText(t`Import cancelled`);
+        return;
+    }
     const prompt = t`Importing will merge into the current local data directory (same-path files will be overwritten). Continue?`;
     if (!await Popup.show.confirm(t`Confirm data import`, prompt)) return;
     toastr.info(t`Importing data archive...`);
-    await runMigrationJob('import', startImportJob);
+    await runMigrationJob('import', () => startImportJob(file));
 }
 
 async function onExportClick() {

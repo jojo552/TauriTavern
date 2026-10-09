@@ -1,3 +1,4 @@
+pub mod bundled_resources;
 pub mod bundled_template;
 pub mod byte_reader;
 pub mod data_archive;

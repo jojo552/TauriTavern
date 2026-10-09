@@ -1,33 +1,20 @@
 use std::sync::Arc;
 
-use tauri::{AppHandle, Manager};
-
-use crate::app::startup_profile::initial_tauritavern_settings;
-use crate::infrastructure::apis::github_update_repository::GitHubUpdateRepository;
-use crate::infrastructure::assets::read_resource_json;
-use crate::infrastructure::logging::llm_api_logs::{
-    LlmApiLogStore, LoggingChatCompletionRepository,
-};
-use crate::infrastructure::paths::RuntimePaths;
-use crate::infrastructure::repositories::file_content_repository::FileContentRepository;
-use crate::infrastructure::repositories::file_preset_repository::FilePresetRepository;
+use crate::{HostDependencies, RuntimeConfig};
 use tt_adapter_extension::FileExtensionRepository;
-use tt_adapter_http::HttpClientPool;
 use tt_adapter_media::{
     FileAvatarRepository, FileBackgroundRepository, FileImageMetadataRepository,
 };
 use tt_adapter_provider_http::{
-    HttpChatCompletionRepository, HttpEmbeddingRepository, HttpProviderMetadataRepository,
-    HttpSearxngSearchRepository, HttpStableDiffusionRepository, HttpTranslateRepository,
-    HttpTtsRepository,
+    HttpEmbeddingRepository, HttpProviderMetadataRepository, HttpSearxngSearchRepository,
+    HttpStableDiffusionRepository, HttpTranslateRepository, HttpTtsRepository,
 };
-use tt_adapter_storage_core::commit_stage::PageGeneration;
 use tt_adapter_storage_core::{
-    DataDirectory, FileAssetRepository, FileChatRepository, FileExtensionStoreRepository,
-    FileGroupRepository, FileLlmConnectionRepository, FileMcpServerRepository,
-    FilePromptCacheRepository, FileQuickReplyRepository, FileSecretRepository,
-    FileSettingsRepository, FileThemeRepository, FileUserDirectoryRepository,
-    FileUserEndpointGrantRepository, FileUserRepository,
+    DataDirectory, FileAssetRepository, FileChatRepository, FileContentRepository,
+    FileExtensionStoreRepository, FileGroupRepository, FileLlmConnectionRepository,
+    FileMcpServerRepository, FilePresetRepository, FilePromptCacheRepository,
+    FileQuickReplyRepository, FileSecretRepository, FileSettingsRepository, FileThemeRepository,
+    FileUserDirectoryRepository, FileUserEndpointGrantRepository, FileUserRepository,
     chat_directory_identity::new_shared_chat_alias_store_for_user_dir,
 };
 use tt_adapter_storage_userdata::FileAgentProfileRepository;
@@ -38,7 +25,7 @@ use tt_adapter_storage_userdata::{FileSkillRepository, FileSpriteRepository};
 use tt_adapter_tokenization::MiktikTokenizerRepository;
 use tt_adapter_vector::{CandleLocalEmbeddingRepository, RedbVectorRepository};
 use tt_domain::errors::DomainError;
-use tt_domain::models::settings::{ChatBackupSettings, UserSettings};
+use tt_domain::models::settings::UserSettings;
 use tt_ports::repositories::agent_invocation_repository::AgentInvocationRepository;
 use tt_ports::repositories::agent_profile_repository::AgentProfileRepository;
 use tt_ports::repositories::agent_profile_storage_health_repository::AgentProfileStorageHealthRepository;
@@ -74,7 +61,6 @@ use tt_ports::repositories::theme_repository::ThemeRepository;
 use tt_ports::repositories::tokenizer_repository::TokenizerRepository;
 use tt_ports::repositories::translate_repository::TranslateRepository;
 use tt_ports::repositories::tts_repository::TtsRepository;
-use tt_ports::repositories::update_repository::UpdateRepository;
 use tt_ports::repositories::user_directory_repository::UserDirectoryRepository;
 use tt_ports::repositories::user_endpoint_grant_repository::UserEndpointGrantRepository;
 use tt_ports::repositories::user_repository::UserRepository;
@@ -85,66 +71,62 @@ use tt_ports::repositories::workspace_repository::WorkspaceRepository;
 use tt_ports::repositories::world_info_repository::WorldInfoRepository;
 use tt_ports::settings::ChatBackupRuntime;
 
-pub(in crate::app::composition) struct AppRepositories {
-    pub(in crate::app::composition) character_repository: Arc<dyn CharacterRepository>,
-    pub(in crate::app::composition) chat_repository: Arc<dyn ChatRepository>,
-    pub(in crate::app::composition) group_chat_repository: Arc<dyn GroupChatRepository>,
-    pub(in crate::app::composition) chat_commit_repository: Arc<dyn ChatCommitRepository>,
-    pub(in crate::app::composition) chat_backup_runtime: Arc<dyn ChatBackupRuntime>,
-    pub(in crate::app::composition) user_repository: Arc<dyn UserRepository>,
-    pub(in crate::app::composition) settings_repository: Arc<dyn SettingsRepository>,
-    pub(in crate::app::composition) prompt_cache_repository: Arc<dyn PromptCacheRepository>,
-    pub(in crate::app::composition) user_directory_repository: Arc<dyn UserDirectoryRepository>,
-    pub(in crate::app::composition) secret_repository: Arc<dyn SecretRepository>,
-    pub(in crate::app::composition) skill_repository: Arc<dyn SkillRepository>,
-    pub(in crate::app::composition) sprite_repository: Arc<dyn SpriteRepository>,
-    pub(in crate::app::composition) content_repository: Arc<dyn ContentRepository>,
-    pub(in crate::app::composition) asset_repository: Arc<dyn AssetRepository>,
-    pub(in crate::app::composition) extension_repository: Arc<dyn ExtensionRepository>,
-    pub(in crate::app::composition) extension_store_repository: Arc<dyn ExtensionStoreRepository>,
-    pub(in crate::app::composition) avatar_repository: Arc<dyn AvatarRepository>,
-    pub(in crate::app::composition) group_repository: Arc<dyn GroupRepository>,
-    pub(in crate::app::composition) background_repository: Arc<dyn BackgroundRepository>,
-    pub(in crate::app::composition) image_metadata_repository: Arc<dyn ImageMetadataRepository>,
-    pub(in crate::app::composition) theme_repository: Arc<dyn ThemeRepository>,
-    pub(in crate::app::composition) preset_repository: Arc<dyn PresetRepository>,
-    pub(in crate::app::composition) quick_reply_repository: Arc<dyn QuickReplyRepository>,
-    pub(in crate::app::composition) agent_profile_repository: Arc<dyn AgentProfileRepository>,
-    pub(in crate::app::composition) agent_profile_storage_health_repository:
+pub(crate) struct Repositories {
+    pub(crate) character_repository: Arc<dyn CharacterRepository>,
+    pub(crate) chat_repository: Arc<dyn ChatRepository>,
+    pub(crate) group_chat_repository: Arc<dyn GroupChatRepository>,
+    pub(crate) chat_commit_repository: Arc<dyn ChatCommitRepository>,
+    pub(crate) chat_backup_runtime: Arc<dyn ChatBackupRuntime>,
+    pub(crate) user_repository: Arc<dyn UserRepository>,
+    pub(crate) settings_repository: Arc<dyn SettingsRepository>,
+    pub(crate) prompt_cache_repository: Arc<dyn PromptCacheRepository>,
+    pub(crate) user_directory_repository: Arc<dyn UserDirectoryRepository>,
+    pub(crate) secret_repository: Arc<dyn SecretRepository>,
+    pub(crate) skill_repository: Arc<dyn SkillRepository>,
+    pub(crate) sprite_repository: Arc<dyn SpriteRepository>,
+    pub(crate) content_repository: Arc<dyn ContentRepository>,
+    pub(crate) asset_repository: Arc<dyn AssetRepository>,
+    pub(crate) extension_repository: Arc<dyn ExtensionRepository>,
+    pub(crate) extension_store_repository: Arc<dyn ExtensionStoreRepository>,
+    pub(crate) avatar_repository: Arc<dyn AvatarRepository>,
+    pub(crate) group_repository: Arc<dyn GroupRepository>,
+    pub(crate) background_repository: Arc<dyn BackgroundRepository>,
+    pub(crate) image_metadata_repository: Arc<dyn ImageMetadataRepository>,
+    pub(crate) theme_repository: Arc<dyn ThemeRepository>,
+    pub(crate) preset_repository: Arc<dyn PresetRepository>,
+    pub(crate) quick_reply_repository: Arc<dyn QuickReplyRepository>,
+    pub(crate) agent_profile_repository: Arc<dyn AgentProfileRepository>,
+    pub(crate) agent_profile_storage_health_repository:
         Arc<dyn AgentProfileStorageHealthRepository>,
-    pub(in crate::app::composition) agent_run_repository: Arc<dyn AgentRunRepository>,
-    pub(in crate::app::composition) agent_session_repository: Arc<dyn AgentSessionRepository>,
-    pub(in crate::app::composition) agent_invocation_repository: Arc<dyn AgentInvocationRepository>,
-    pub(in crate::app::composition) agent_workspace_lifecycle_repository:
-        Arc<dyn AgentWorkspaceLifecycleRepository>,
-    pub(in crate::app::composition) llm_connection_repository: Arc<dyn LlmConnectionRepository>,
-    pub(in crate::app::composition) user_endpoint_grant_repository:
-        Arc<dyn UserEndpointGrantRepository>,
-    pub(in crate::app::composition) mcp_server_repository: Arc<dyn McpServerRepository>,
-    pub(in crate::app::composition) workspace_repository: Arc<dyn WorkspaceRepository>,
-    pub(in crate::app::composition) chat_completion_repository: Arc<dyn ChatCompletionRepository>,
-    pub(in crate::app::composition) provider_metadata_repository:
-        Arc<dyn ProviderMetadataRepository>,
-    pub(in crate::app::composition) searxng_search_repository: Arc<dyn SearxngSearchRepository>,
-    pub(in crate::app::composition) tokenizer_repository: Arc<dyn TokenizerRepository>,
-    pub(in crate::app::composition) stable_diffusion_repository: Arc<dyn StableDiffusionRepository>,
-    pub(in crate::app::composition) translate_repository: Arc<dyn TranslateRepository>,
-    pub(in crate::app::composition) tts_repository: Arc<dyn TtsRepository>,
-    pub(in crate::app::composition) world_info_repository: Arc<dyn WorldInfoRepository>,
-    pub(in crate::app::composition) update_repository: Arc<dyn UpdateRepository>,
-    pub(in crate::app::composition) vector_repository: Arc<dyn VectorRepository>,
-    pub(in crate::app::composition) remote_embedding_repository: Arc<dyn RemoteEmbeddingRepository>,
-    pub(in crate::app::composition) local_embedding_repository: Arc<dyn LocalEmbeddingRepository>,
+    pub(crate) agent_run_repository: Arc<dyn AgentRunRepository>,
+    pub(crate) agent_session_repository: Arc<dyn AgentSessionRepository>,
+    pub(crate) agent_invocation_repository: Arc<dyn AgentInvocationRepository>,
+    pub(crate) agent_workspace_lifecycle_repository: Arc<dyn AgentWorkspaceLifecycleRepository>,
+    pub(crate) llm_connection_repository: Arc<dyn LlmConnectionRepository>,
+    pub(crate) user_endpoint_grant_repository: Arc<dyn UserEndpointGrantRepository>,
+    pub(crate) mcp_server_repository: Arc<dyn McpServerRepository>,
+    pub(crate) workspace_repository: Arc<dyn WorkspaceRepository>,
+    pub(crate) chat_completion_repository: Arc<dyn ChatCompletionRepository>,
+    pub(crate) provider_metadata_repository: Arc<dyn ProviderMetadataRepository>,
+    pub(crate) searxng_search_repository: Arc<dyn SearxngSearchRepository>,
+    pub(crate) tokenizer_repository: Arc<dyn TokenizerRepository>,
+    pub(crate) stable_diffusion_repository: Arc<dyn StableDiffusionRepository>,
+    pub(crate) translate_repository: Arc<dyn TranslateRepository>,
+    pub(crate) tts_repository: Arc<dyn TtsRepository>,
+    pub(crate) world_info_repository: Arc<dyn WorldInfoRepository>,
+    pub(crate) vector_repository: Arc<dyn VectorRepository>,
+    pub(crate) remote_embedding_repository: Arc<dyn RemoteEmbeddingRepository>,
+    pub(crate) local_embedding_repository: Arc<dyn LocalEmbeddingRepository>,
 }
 
-pub(super) async fn build(
-    app_handle: &AppHandle,
+pub(crate) async fn build(
     data_directory: &DataDirectory,
-    chat_backup_settings: ChatBackupSettings,
-) -> Result<AppRepositories, DomainError> {
-    let http_client_pool = app_handle.state::<Arc<HttpClientPool>>().inner().clone();
-    let page_generation = app_handle.state::<Arc<PageGeneration>>().inner().clone();
-    let runtime_paths = app_handle.state::<RuntimePaths>();
+    config: &RuntimeConfig,
+    dependencies: &HostDependencies,
+) -> Result<Repositories, DomainError> {
+    let http_client_pool = dependencies.http_client_pool.clone();
+    let page_generation = dependencies.page_generation.clone();
+    let chat_backup_settings = config.tauritavern_settings.chat_backups;
     let data_root = data_directory.root().to_path_buf();
     let default_user_dir = data_directory.default_user().to_path_buf();
     let chat_aliases = new_shared_chat_alias_store_for_user_dir(data_directory.default_user());
@@ -157,7 +139,7 @@ pub(super) async fn build(
         chat_aliases.clone(),
         chat_backup_settings,
         page_generation.clone(),
-        crate::platform::ipc::COMMIT_FRAME_BYTES,
+        config.max_commit_frame_bytes,
     ));
     file_chat_repository
         .cleanup_orphaned_chat_commit_staging()
@@ -179,16 +161,12 @@ pub(super) async fn build(
         data_directory.user_data().to_path_buf(),
     ));
 
-    let default_user_settings: UserSettings = {
-        let app_handle = app_handle.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            read_resource_json(&app_handle, "default/content/settings.json")
-        })
-        .await
-        .map_err(|error| {
-            DomainError::InternalError(format!("Default user settings load task failed: {error}"))
-        })??
-    };
+    let default_user_settings: UserSettings =
+        tt_adapter_storage_core::bundled_resources::read_resource_json(
+            dependencies.bundled_resources.clone(),
+            "default/content/settings.json",
+        )
+        .await?;
     let avatar_repository: Arc<dyn AvatarRepository> = Arc::new(FileAvatarRepository::new(
         default_user_dir.join("User Avatars"),
     ));
@@ -196,9 +174,9 @@ pub(super) async fn build(
     let settings_repository = Arc::new(FileSettingsRepository::new(
         data_directory.settings().to_path_buf(),
         default_user_settings,
-        initial_tauritavern_settings(),
+        config.initial_tauritavern_settings.clone(),
         page_generation.clone(),
-        crate::platform::ipc::COMMIT_FRAME_BYTES,
+        config.max_commit_frame_bytes,
     ));
     settings_repository.cleanup_orphaned_commit_staging().await;
     // Materialize settings sections before background sync can scan the data directory.
@@ -228,7 +206,7 @@ pub(super) async fn build(
     ));
 
     let content_repository: Arc<dyn ContentRepository> = Arc::new(FileContentRepository::new(
-        app_handle.clone(),
+        dependencies.bundled_resources.clone(),
         data_root.clone(),
         default_user_dir.clone(),
     ));
@@ -251,7 +229,7 @@ pub(super) async fn build(
         data_root.join("_tauritavern").join("extension-store"),
         data_root.join(".staging").join("extension-store"),
         page_generation.clone(),
-        crate::platform::ipc::COMMIT_FRAME_BYTES,
+        config.max_commit_frame_bytes,
     ));
     extension_store_repository
         .cleanup_orphaned_commit_staging()
@@ -275,7 +253,7 @@ pub(super) async fn build(
         Arc::new(FileThemeRepository::new(default_user_dir.join("themes")));
 
     let preset_repository: Arc<dyn PresetRepository> = Arc::new(FilePresetRepository::new(
-        app_handle.clone(),
+        dependencies.bundled_resources.clone(),
         default_user_dir.clone(),
         content_repository.clone(),
     ));
@@ -296,7 +274,7 @@ pub(super) async fn build(
     );
     let user_endpoint_grant_repository: Arc<dyn UserEndpointGrantRepository> =
         Arc::new(FileUserEndpointGrantRepository::new(
-            runtime_paths
+            config
                 .app_root
                 .join("security")
                 .join("user-endpoint-grants.json"),
@@ -316,12 +294,7 @@ pub(super) async fn build(
     let agent_workspace_lifecycle_repository: Arc<dyn AgentWorkspaceLifecycleRepository> =
         file_agent_repository;
 
-    let llm_api_log_store = app_handle.state::<Arc<LlmApiLogStore>>().inner().clone();
-    let chat_completion_repository: Arc<dyn ChatCompletionRepository> =
-        Arc::new(LoggingChatCompletionRepository::new(
-            Arc::new(HttpChatCompletionRepository::new(http_client_pool.clone())),
-            llm_api_log_store,
-        ));
+    let chat_completion_repository = dependencies.chat_completion_repository.clone();
     let provider_metadata_repository: Arc<dyn ProviderMetadataRepository> = Arc::new(
         HttpProviderMetadataRepository::new(http_client_pool.clone()),
     );
@@ -347,14 +320,11 @@ pub(super) async fn build(
     let world_info_repository = Arc::new(FileWorldInfoRepository::new(
         data_directory.default_user().join("worlds"),
         page_generation,
-        crate::platform::ipc::COMMIT_FRAME_BYTES,
+        config.max_commit_frame_bytes,
     ));
     world_info_repository
         .cleanup_orphaned_commit_staging()
         .await;
-
-    let update_repository: Arc<dyn UpdateRepository> =
-        Arc::new(GitHubUpdateRepository::new(http_client_pool.clone()));
 
     let vector_root = default_user_dir.join("vectors");
     let vector_repository: Arc<dyn VectorRepository> = Arc::new(RedbVectorRepository::new(
@@ -366,7 +336,7 @@ pub(super) async fn build(
         CandleLocalEmbeddingRepository::new(data_root.join("_cache").join("embedding-models")),
     );
 
-    Ok(AppRepositories {
+    Ok(Repositories {
         character_repository,
         chat_repository,
         group_chat_repository,
@@ -408,7 +378,6 @@ pub(super) async fn build(
         translate_repository,
         tts_repository,
         world_info_repository,
-        update_repository,
         vector_repository,
         remote_embedding_repository,
         local_embedding_repository,

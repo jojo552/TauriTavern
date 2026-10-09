@@ -1,6 +1,6 @@
 // @ts-check
 
-import { invoke, isTauri } from '../../../tauri-bridge.js';
+import { invoke, isProjectHost } from '../../../tauri-bridge.js';
 
 /** @type {unknown} */
 let settingsRevision = null;
@@ -33,7 +33,7 @@ function requireSettingsRevision(revision) {
  * @param {unknown} revision
  */
 export function captureSettingsSaveState(settings, revision) {
-    settingsRevision = isTauri() ? requireSettingsRevision(revision) : null;
+    settingsRevision = isProjectHost() ? requireSettingsRevision(revision) : null;
     personaBaseline = settingsRevision == null ? {} : structuredClone(personaRecords(settings));
 }
 
@@ -101,7 +101,7 @@ export async function loadPersonaSnapshot(powerUser) {
  */
 export async function saveSettingsSnapshot(payload, headers) {
     const requestHeaders = new Headers(headers);
-    const tauri = isTauri();
+    const tauri = isProjectHost();
     let personaUpdates = {};
     if (tauri) {
         if (settingsRevision == null) {

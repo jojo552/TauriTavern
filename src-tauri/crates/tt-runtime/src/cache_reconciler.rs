@@ -13,15 +13,15 @@ use tt_application::services::settings_service::SettingsService;
 use tt_domain::errors::DomainError;
 use tt_ports::sync::DataChangeReconciler;
 
-pub(in crate::app::composition) struct ServiceCacheReconciler {
-    pub(in crate::app::composition) character_service: Arc<CharacterService>,
-    pub(in crate::app::composition) chat_service: Arc<ChatService>,
-    pub(in crate::app::composition) group_chat_service: Arc<GroupChatService>,
-    pub(in crate::app::composition) group_service: Arc<GroupService>,
-    pub(in crate::app::composition) secret_service: Arc<SecretService>,
-    pub(in crate::app::composition) settings_service: Arc<SettingsService>,
-    pub(in crate::app::composition) mcp_service: Arc<McpService>,
-    pub(in crate::app::composition) chat_history_coordinator: Arc<ChatHistoryCoordinator>,
+pub(crate) struct ServiceCacheReconciler {
+    pub(crate) character_service: Arc<CharacterService>,
+    pub(crate) chat_service: Arc<ChatService>,
+    pub(crate) group_chat_service: Arc<GroupChatService>,
+    pub(crate) group_service: Arc<GroupService>,
+    pub(crate) secret_service: Arc<SecretService>,
+    pub(crate) settings_service: Arc<SettingsService>,
+    pub(crate) mcp_service: Arc<McpService>,
+    pub(crate) chat_history_coordinator: Arc<ChatHistoryCoordinator>,
 }
 
 #[async_trait]

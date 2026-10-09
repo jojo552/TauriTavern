@@ -1,4 +1,4 @@
-import { invoke } from '../../../tauri-bridge.js';
+import { invoke, isWebHost } from '../../../tauri-bridge.js';
 import { stripJsonl } from '../../../tauri/main/kernel/chat-utils.js';
 import {
     characterStemFromAvatarFileName,
@@ -9,7 +9,16 @@ import { commitChatMetadata, commitChatPayload } from './commit.js';
 import { jsonlStreamToPayload } from './jsonl.js';
 import { loadColdChatPayload } from './cold-swipes.js';
 
-const { createReadableFileStream } = createReadableFileStreamService({ invoke });
+const { createReadableFileStream, createByteStream } = createReadableFileStreamService({ invoke });
+
+async function loadWebChatPayload(target, allowNotFound) {
+    const rid = await invoke('open_chat_reader', { target, allowNotFound });
+    if (rid === null) {
+        if (allowNotFound) return [];
+        throw new Error('Chat reader is missing');
+    }
+    return jsonlStreamToPayload(createByteStream(rid));
+}
 
 export const CHAT_COMMIT_REASON = Object.freeze({
     MUTATION: 'mutation',
@@ -54,6 +63,7 @@ function groupTarget(id) {
 export async function loadCharacterChatPayload({ characterName, avatarUrl, fileName, allowNotFound = false, coldSwipes = false }) {
     const target = characterTarget({ characterName, avatarUrl, fileName });
     if (coldSwipes) return loadColdChatPayload(target, allowNotFound);
+    if (isWebHost()) return loadWebChatPayload(target, allowNotFound);
     const path = await invoke('get_chat_payload_path', {
         characterName: target.characterId,
         fileName: target.fileName,
@@ -82,6 +92,7 @@ export async function saveCharacterChatMetadata({ characterName, avatarUrl, file
 export async function loadGroupChatPayload({ id, allowNotFound = false, coldSwipes = false }) {
     const target = groupTarget(id);
     if (coldSwipes) return loadColdChatPayload(target, allowNotFound);
+    if (isWebHost()) return loadWebChatPayload(target, allowNotFound);
     const path = await invoke('get_group_chat_path', { id: target.chatId, allowNotFound });
 
     if (!path) {

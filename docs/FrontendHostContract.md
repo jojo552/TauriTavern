@@ -1,8 +1,8 @@
 # Frontend Host Contract（TauriTavern）
 
 > 目的：把“宿主平台层（Host Kernel）对外承诺的行为”显式化，避免重构 `src/tauri/main/*` 时误伤上游 SillyTavern / 第三方扩展 / 重脚本 / 角色卡。  
-> 范围：仅覆盖前端宿主层（WebView 内运行的 Host Kernel）对外可观察的契约；不描述 Rust 后端内部实现。  
-> 参考：`docs/FrontendGuide.md`（集成架构与开发方式）
+> 范围：覆盖前端宿主层（原生 WebView 或浏览器内运行的 Host Kernel）对外可观察的契约；不描述 Rust 后端内部实现。
+> 参考：[FrontendGuide](FrontendGuide.md)（集成架构与开发方式）；[BrowserHost](CurrentState/BrowserHost.md)（HTTP transport、文件传输与当前能力边界）
 
 ---
 
@@ -27,7 +27,7 @@
 
 页面脚本运行前，宿主已写入 `window.__TAURITAVERN_HOST__`（见 2.2）。
 
-开发态 HTTP 入口会先由 `scripts/tauri-dev-server.mjs` 注入 `src/dev-sw-bootstrap.js`，仅负责让持久 Service Worker registration 与当前 WebView 会话重新绑定，不参与应用模块初始化。
+原生 Tauri 的开发态 HTTP 入口会先由 `scripts/tauri-dev-server.mjs` 注入 `src/dev-sw-bootstrap.js`，仅负责让持久 Service Worker registration 与当前 WebView 会话重新绑定，不参与应用模块初始化。浏览器宿主直接使用 HTTP/SSE transport，复用下列应用启动链路，不模拟 Tauri 注入。
 
 1. `src/init.js`：负责最早期的环境标记、可选 perf 开关与动态 import。
 2. `src/tauri-main.js`：薄入口，仅调用 `bootstrapTauriMain()`。
@@ -38,17 +38,17 @@
 
 - `window.__TAURITAVERN_MAIN_READY__ : Promise<void>`
   - 由 `src/tauri/main/bootstrap.js` 写入，表示宿主层初始化已完成（或失败已被捕获并写入 console）。
-  - 在 Tauri runtime 下，resolve 前必须完成 Rust `BackendReadiness` 等待，确保首批依赖 `AppState` 的命令不靠 “state not managed” 文本重试作为正常控制流。
+  - 在 Tauri runtime 下，resolve 前必须完成 Rust `BackendReadiness` 等待，确保首批依赖 `AppState` 的命令不靠 “state not managed” 文本重试作为正常控制流。浏览器宿主须先取得页面 session 并收到匹配的 SSE `ready` 帧；HTTP 服务在接受连接前已完成后端装配。
 - `window.__TAURITAVERN_PERF_READY__ : Promise<unknown> | undefined`
   - 仅在 perf-hud 启用时存在（见第 5 节）。
 - `globalThis.__TAURITAVERN_PERF_ENABLED__ : boolean`
   - 由 `src/init.js` 在动态 import 前写入；`bootstrap` 会优先读取它（避免重复计算/时序差异）。
-- `window.__TAURI_RUNNING__ : true`
-  - 由 `src/init.js` 写入；用于桥接层尽早判断 Tauri 环境（避免移动端注入时序 race）。
+- `window.__TAURI_RUNNING__ : true`（仅原生 Tauri）
+  - 由 `src/init.js` 在非 web 宿主写入；用于桥接层尽早判断 Tauri 环境（避免移动端注入时序 race）。浏览器宿主不写入该标记，也不伪造 `__TAURI__` / `__TAURI_INTERNALS__`。
 - `window.__TAURITAVERN_HOST__ : { platform, kind }`（Project）
-  - 宿主身份：Rust 按编译目标生成，在页面脚本之前写入主 WebView 的顶层 frame，对象冻结。
-  - `platform`：`'windows' | 'macos' | 'linux' | 'android' | 'ios' | 'ohos'`；`kind`：`'desktop' | 'mobile'`，与 Rust 的 `desktop` / `mobile` 编译条件同源。
-  - 第一方代码只通过 `src/scripts/util/host-identity.js` 读取，见 `docs/FrontendGuide.md` §2.1。
+  - 宿主身份在页面脚本之前写入顶层 frame，对象冻结。原生身份由 Rust 编译目标生成；HTTP 宿主注入固定 `{ platform: 'browser', kind: 'web' }`，与浏览器所在操作系统或屏幕形态无关。
+  - `platform`：`'windows' | 'macos' | 'linux' | 'android' | 'ios' | 'ohos' | 'browser'`；`kind`：`'desktop' | 'mobile' | 'web'`。原生的 `desktop` / `mobile` 与 Rust 编译条件同源。
+  - 第一方代码统一通过 [host-identity.js](../src/scripts/util/host-identity.js) 读取；其中 `isWebHost()` 只匹配完整 `browser/web` 身份，非项目环境缺少身份时返回 `false`，bridge 重导出该 helper。其他身份读取器缺少身份时抛错。见 [FrontendGuide §2.1](FrontendGuide.md#21-宿主身份)。
 
 ---
 
@@ -114,11 +114,11 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
   - `invoke.safeInvoke(...)` / `invoke.flushAll()`：对 `context` invoke 能力的稳定包装。
   - `assets.thumbnailUrl` / `assets.backgroundPath`：对 3.1 中稳定 Host Resource URL helper 的统一引用。
   - `iosPolicy`（Project）：iOS 分发策略的启动快照，见 `docs/CurrentState/iOSPolicy.md`。
-  - `api.layout`：读取与订阅已排除原生遮挡的内容视口，见 [API/Layout.md](API/Layout.md)。
+  - `api.layout`：读取与订阅当前内容视口。原生遮挡由原生层先消费；浏览器宿主读取 `visualViewport`（缺少时用 `innerWidth/innerHeight`），不依赖原生窗口快照或背景发布。见 [API/Layout.md](API/Layout.md)。
   - `api.chat`：TauriTavern 独有的聊天/记忆类扩展 API（聊天摘要、元数据、历史分页、稳定存储、后端定位、纯文本检索）。
     - 详细签名与示例见：`docs/API/Chat.md`。
-  - `api.characterCards`：用原生选择器选择本地角色卡（`json/png`），返回标准 `File[]`，交给上游的导入或替换流程。
-    - `isNativePickerAvailable()`：所有宿主都为 `true`。
+  - `api.characterCards`：选择本地角色卡（`json/png`），返回标准 `File[]`，交给上游的导入或替换流程。原生宿主使用原生选择器；浏览器在用户激活内调用 DOM 文件输入框。
+    - `isNativePickerAvailable()`：所有宿主都为 `true`；名称因兼容保留，在浏览器只表示该选择入口可用，不意味着存在原生插件。
     - `pickFiles(options?: { multiple?: boolean }) -> Promise<File[] | null>`：支持多选；取消返回 `null`，失败抛错。
   - `api.extension.store`：扩展级**全局持久化**（不绑定 chat），提供 KV JSON + Blob，支持多 table 与 Blob 流式读取。
     - 签名、读写边界与示例见 [Extension Store API](API/Extension.md)。
@@ -143,6 +143,8 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
       - `setKeep(value: number) -> Promise<void>`
       - 语义：宿主统一负责历史索引、实时索引流与 keep 设置持久化；调用方不应直接操作 `devlog_*` 命令。
     - `api.dev.exportBundle() -> Promise<boolean>`：生成并交付 debug bundle（zip），返回是否已交付，详见 `docs/API/Dev.md`。
+
+浏览器也安装 `api.dev`，但 API 对象存在不代表所有原生命令可用。当前支持前端本地日志及镜像到服务端 tracing；原生 backend log tail/stream、LLM API log 查询/stream 与 debug bundle 导出未接入 HTTP host，调用相应命令会失败。服务端后台错误当前留在服务端日志，不承诺原生 user-error toast hub 的推送。完整边界见 [BrowserHost](CurrentState/BrowserHost.md)。
 
 `api.dev.*` 的长期契约要求：
 
@@ -242,7 +244,7 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
 
 最关键的启动依赖：
 
-- `/csrf-token`：返回固定 token（用于兼容上游初始化对 CSRF 的假设）
+- `/csrf-token`：原生 Tauri 返回上游初始化兼容 token；浏览器返回当前页面 session 的真实 CSRF token，HTTP invoke 由服务端校验，不能以固定 token 替代。
 - `/version`：返回版本信息
 
 高频与高风险路径（示例，不是完整列表）：
@@ -251,7 +253,7 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
   - 用户设定沿用上游 settings 数据形状；列表刷新不写入资料，单项保存失败不影响其他修改。
   - `/api/settings/save` 接收完整 JSON。读取与保存确认返回 `tauritavern_settings_revision`；调用方将其作为不透明令牌，以 JSON 编码经 `X-TauriTavern-Settings-Revision` 回传。过期令牌返回 409，未携带时仍可覆盖保存。Persona 修改独立确认成败。
   - `/api/settings/get` 保持上游响应形状，`settings` 仍为 JSON 字符串；启动读取与应用顺序见 [StartupOptimization §4](CurrentState/StartupOptimization.md#4-设置与-bootstrap-元数据读取)。
-- `/api/backends/chat-completions/generate` 的流式响应由 Rust 进程内会话持有生成任务、移动端 best-effort 后台执行租约与未确认事件；前端通过单调递增的 `after_seq` 消费并确认，WebView 暂停后可在同一 Rust 进程内重放缺失事件。单次读取失败会使用相同 cursor 重试一次，第二次失败才关闭会话。后台租约失败或到期不拥有生成终止权；该保证不跨进程重启，也不伪装成上游 provider 的 HTTP 断点续传。
+- `/api/backends/chat-completions/generate` 的流式响应由 Rust 进程内会话持有生成任务、移动端 best-effort 后台执行租约与未确认事件；前端通过单调递增的 `after_seq` 消费并确认，原生 WebView 暂停后可在同一 Rust 进程内重放缺失事件。单次读取失败会使用相同 cursor 重试一次，第二次失败才关闭会话。后台租约失败或到期不拥有生成终止权；该保证不跨进程重启，也不伪装成上游 provider 的 HTTP 断点续传。浏览器的页面 session 还受 SSE 生命周期约束：SSE 断开会关闭页面 AI 会话，不自动重连或跨页面恢复，见 [BrowserHost](CurrentState/BrowserHost.md)。
 - `/css/user.css`：用户自定义 CSS 覆盖文件（数据目录 `_css/user.css`）
 - `/scripts/extensions/third-party/*`：third-party 扩展静态资源端点（ESM/CSS/url()/字体/图片）
 - `/thumbnail`：缩略图端点（与 `__TAURITAVERN_THUMBNAIL__` 强耦合）
@@ -260,11 +262,11 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
   - `/backgrounds/*`、`/assets/*`
   - `/user/images/*`、`/user/files/*`
 
-`/api/users/backup` 与上游不同：由宿主生成并交付备份，返回 `{ ok, delivered, includes_secrets }`。
+`/api/users/backup` 与上游不同：由宿主生成备份。原生宿主交付后返回 `{ ok, delivered, includes_secrets }`；浏览器以一次性同源 URL 下载，返回 `{ ok, status: 'handed-off', includes_secrets }`，不确认保存或取消。归档下载令牌绑定浏览器 Cookie，而非页面 session；首次取用即消费，生命周期与清理见 [BrowserHost](CurrentState/BrowserHost.md)。
 
 ### 4.4 浏览器资源契约（Public）
 
-这些路径必须能被浏览器**原生子资源加载**（`<img src>` / `<link href>` / `<script src>` / `CSS url()`），且 dev/prod 语义一致：
+这些路径必须能被浏览器**原生子资源加载**（`<img src>` / `<link href>` / `<script src>` / `CSS url()`），且 dev/prod 语义一致。原生 Tauri 与 HTTP host 共用 `HostResourceService`，不得为浏览器维护第二套资源业务：
 
 - `/scripts/extensions/third-party/*`
   - `.git` 是 SillyTavern 迁移兼容所需的普通路径组件；显式文件请求不得仅因任一组件名为 `.git` 而被拒绝。`.`、`..`、编码路径分隔符与路径逃逸仍必须拒绝。
@@ -334,7 +336,7 @@ header 名也可从 `window.__TAURITAVERN__?.traceHeader` 获取（用于避免�
 | `data-tt-mobile-surface`；`layout-kit.js` 的 `SURFACE`/`applySurface()` | 保留，无布局作用 |
 | `--tt-ime-bottom`、`--tt-base-viewport-height`、`__TAURITAVERN_INSETS__`、`__TAURITAVERN_MOBILE_OVERLAY_COMPAT__`、`__TAURITAVERN_MOBILE_IFRAME_VIEWPORT_CONTRACT_BRIDGE__`、`__TAURITAVERN_ANDROID_IME_LAYOUT_HOST__` | 已移除 |
 
-TauriTavern 第一方功能在所有平台直接使用同一个原生剪贴板写入器。该契约只授予 `clipboard-manager:allow-write-text`，不包含读取/清空/图片等权限；写入失败必须向调用方传播。
+TauriTavern 第一方功能统一调用 bridge 的 `writeClipboardText()`。原生宿主只授予 `clipboard-manager:allow-write-text`，不包含读取/清空/图片等权限；浏览器使用 DOM Clipboard API，受安全上下文、权限与用户激活约束。写入失败必须向调用方传播。
 
 ---
 
@@ -357,6 +359,10 @@ TauriTavern 第一方功能在所有平台直接使用同一个原生剪贴板�
 移动宿主（`kind: 'mobile'`）：
 
 - `window.open()` 不创建应用内新窗口；对外链（`http/https/mailto/tel`）通过系统浏览器打开，并返回 `null`（等价“弹窗被阻止”的可观察语义）。
+
+浏览器宿主（`kind: 'web'`）：
+
+- 保留浏览器自己的 `window.open()`、导航与弹窗阻止规则，不调用原生 opener 或创建 Tauri WebView。
 
 工程约定（Project）：
 

@@ -11,6 +11,13 @@ const WORKSPACE_MANIFEST = path.join(REPO_ROOT, 'src-tauri', 'Cargo.toml');
 const DEPENDENCY_TREE_LABEL = 'all-features/all-targets';
 const DEPENDENCY_TREE_ARGS = ['--all-features', '--target', 'all', '-e', 'normal,build,dev'];
 
+// Inner crates must not depend on the shared composition root or the HTTP host.
+const COMPOSITION_PACKAGES = ['tt-runtime', 'tt-server'];
+const COMPOSITION_SOURCE_PATTERNS = [
+    ['tt-runtime', /\btt_runtime::/],
+    ['tt-server', /\btt_server::/],
+];
+
 const DOMAIN_FORBIDDEN_PACKAGES = new Set([
     'async-trait',
     'axum',
@@ -589,7 +596,13 @@ const ADAPTER_EXTENSION_FORBIDDEN_SOURCE_PATTERNS = [
     ['ttsync-core', /\bttsync_core::/],
 ];
 
-const CRATES = [
+const TAURI_HOST_PACKAGES = ['tauri', 'tauritavern'];
+const TAURI_HOST_SOURCE_PATTERNS = [
+    ['tauri', /\btauri::/],
+    ['main crate', /\btauritavern(_lib)?::/],
+];
+
+const INNER_CRATES = [
     crateConfig('tt-domain', DOMAIN_FORBIDDEN_PACKAGES, DOMAIN_FORBIDDEN_SOURCE_PATTERNS),
     crateConfig('tt-contracts', CONTRACTS_FORBIDDEN_PACKAGES, CONTRACTS_FORBIDDEN_SOURCE_PATTERNS),
     crateConfig('tt-ports', PORTS_FORBIDDEN_PACKAGES, PORTS_FORBIDDEN_SOURCE_PATTERNS),
@@ -607,6 +620,20 @@ const CRATES = [
     crateConfig('tt-adapter-storage-userdata', ADAPTER_STORAGE_USERDATA_FORBIDDEN_PACKAGES, ADAPTER_STORAGE_USERDATA_FORBIDDEN_SOURCE_PATTERNS),
     crateConfig('tt-adapter-media', ADAPTER_MEDIA_FORBIDDEN_PACKAGES, ADAPTER_MEDIA_FORBIDDEN_SOURCE_PATTERNS),
     crateConfig('tt-adapter-workspace-shell', ADAPTER_WORKSPACE_SHELL_FORBIDDEN_PACKAGES, ADAPTER_WORKSPACE_SHELL_FORBIDDEN_SOURCE_PATTERNS),
+].map((config) => ({
+    ...config,
+    forbiddenPackages: new Set([...config.forbiddenPackages, ...COMPOSITION_PACKAGES]),
+    forbiddenSourcePatterns: [...config.forbiddenSourcePatterns, ...COMPOSITION_SOURCE_PATTERNS],
+}));
+
+// Runtime composes shared services; server owns its HTTP/IO glue. Neither depends on Tauri.
+const CRATES = [
+    ...INNER_CRATES,
+    crateConfig('tt-runtime', new Set([...TAURI_HOST_PACKAGES, 'tt-server']), [
+        ...TAURI_HOST_SOURCE_PATTERNS,
+        ['tt-server', /\btt_server::/],
+    ]),
+    crateConfig('tt-server', new Set(TAURI_HOST_PACKAGES), TAURI_HOST_SOURCE_PATTERNS, ['tt-runtime']),
 ];
 
 const MAIN_CRATE_SOURCE_RULES = [
@@ -634,7 +661,7 @@ const MAIN_CRATE_SOURCE_RULES = [
     ]),
 ];
 
-function crateConfig(name, forbiddenPackages, forbiddenSourcePatterns) {
+function crateConfig(name, forbiddenPackages, forbiddenSourcePatterns, requiredDependencies = []) {
     const root = path.join(RUST_CRATES_ROOT, name);
     return {
         name,
@@ -643,6 +670,7 @@ function crateConfig(name, forbiddenPackages, forbiddenSourcePatterns) {
         manifest: path.join(root, 'Cargo.toml'),
         forbiddenPackages,
         forbiddenSourcePatterns,
+        requiredDependencies,
     };
 }
 
@@ -848,7 +876,7 @@ function checkDirectDependencies(config, metadata) {
         return [`${config.name} package missing from cargo metadata`];
     }
 
-    return rustPackage.dependencies
+    const violations = rustPackage.dependencies
         .filter((dependency) => config.forbiddenPackages.has(dependency.name))
         .map((dependency) => {
             const qualifiers = [
@@ -859,6 +887,15 @@ function checkDirectDependencies(config, metadata) {
             const suffix = qualifiers.length > 0 ? ` (${qualifiers.join(', ')})` : '';
             return `${config.name} Cargo.toml declares forbidden dependency: ${dependency.name}${suffix}`;
         });
+
+    for (const name of config.requiredDependencies) {
+        if (!rustPackage.dependencies.some((dependency) =>
+            dependency.name === name && dependency.kind === null && !dependency.optional && dependency.target === null)) {
+            violations.push(`${config.name} Cargo.toml must declare a non-optional, unconditional normal dependency: ${name}`);
+        }
+    }
+
+    return violations;
 }
 
 async function main() {

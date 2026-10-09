@@ -1,6 +1,8 @@
 // @ts-check
 
 import { isDesktopHost } from '../../../scripts/util/host-identity.js';
+import { isWebHost } from '../../../tauri-bridge.js';
+import { createBrowserFileTransfer } from '../../../web/file-transfer.js';
 import { createFileStagingService } from '../services/files/file-staging-service.js';
 import {
     normalizeOptionalNonNegativeInteger,
@@ -97,7 +99,26 @@ function createSkillApi({
     }
 
     async function pickImportArchiveInputs(multiple) {
+        // Open the browser picker in the caller's gesture, before asynchronous cleanup.
+        const browserSelection = isWebHost()
+            ? createBrowserFileTransfer().pickFiles({ kind: 'skill-archive', multiple })
+            : null;
         await discardPickedImport();
+        if (browserSelection) {
+            const files = await browserSelection;
+            if (!files) return null;
+            const inputs = [];
+            try {
+                for (const file of files) {
+                    const path = await staging.stageBlob(file, { kind: 'skill-archive', preferredName: file.name });
+                    inputs.push(rememberPickedImport({ kind: 'archiveFile', path }, () => staging.discardFile(path)));
+                }
+                return inputs;
+            } catch (error) {
+                await discardPickedImport();
+                throw error;
+            }
+        }
         const files = await safeInvoke('pick_import_files', { kind: 'skill-archive', multiple });
         return files?.map(({ path }) => rememberPickedImport(
             { kind: 'archiveFile', path },

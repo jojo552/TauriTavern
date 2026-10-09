@@ -1,3 +1,4 @@
+import type { FileDeliveryResult } from '../../../../file-export.js';
 import { skillScopeLabel } from '../skill-scope';
 import { skillArchiveBlob, type SkillManagerDeps, type SkillPreview, type SkillSection } from './SkillManagerContract';
 
@@ -71,10 +72,9 @@ export async function exportSkillArchive(
     deps: SkillManagerDeps,
     scope: TauriTavernSkillScope,
     skill: TauriTavernSkillIndexEntry,
-): Promise<boolean> {
+): Promise<FileDeliveryResult> {
     const payload = await deps.getSkillApi().export({ scope, name: skill.name });
-    const result = await deps.downloadExport(skillArchiveBlob(payload.contentBase64), payload.fileName, `${skill.name}.zip`);
-    return result.delivered;
+    return deps.downloadExport(skillArchiveBlob(payload.contentBase64), payload.fileName, `${skill.name}.zip`);
 }
 
 export async function deleteSkillMutation(

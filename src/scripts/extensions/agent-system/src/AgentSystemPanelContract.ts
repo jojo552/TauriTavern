@@ -1,3 +1,4 @@
+import type { FileDeliveryResult } from '../../../file-export.js';
 import {
     AGENT_DELEGATION_TOOLS,
     DEFAULT_PROFILE_ID,
@@ -245,7 +246,8 @@ export type AgentSystemPanelControllerDeps = {
     subscribeModelTargetsChanged: (listener: () => void) => () => void;
     subscribeLlmConnectionsChanged: (listener: () => void) => () => void;
     confirmAction: (message: string) => Promise<boolean>;
-    downloadBlob: (blob: Blob, fileName: string) => Promise<{ delivered: boolean }>;
+    downloadBlob: (blob: Blob, fileName: string) => Promise<FileDeliveryResult>;
+    notifyExportResult: (result: FileDeliveryResult) => void | Promise<void>;
     notifyError: (error: unknown) => void;
     notifyWarning: (message: string) => void;
     notifySuccess: (message: string) => void;

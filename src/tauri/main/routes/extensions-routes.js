@@ -1,3 +1,6 @@
+import { isWebHost } from '../../../tauri-bridge.js';
+import { createBrowserFileTransfer } from '../../../web/file-transfer.js';
+
 function parseJobId(value) {
     const jobId = String(value || '').trim();
     return jobId || '';
@@ -75,7 +78,14 @@ export function registerExtensionRoutes(router, context, { jsonResponse }) {
         return jsonResponse({ ok: true });
     });
 
-    router.post('/api/extensions/data-migration/import', async () => {
+    router.post('/api/extensions/data-migration/import', async ({ body }) => {
+        if (isWebHost()) {
+            // The page picked and staged the archive itself; the host only receives the staged path.
+            const stagedPath = String(body?.staged_path || '').trim();
+            if (!stagedPath) return jsonResponse({ error: 'A staged archive is required' }, 400);
+            const result = await context.safeInvoke('import_data_archive', { stagedPath, fileName: String(body?.file_name || '') });
+            return jsonResponse({ ok: true, ...result });
+        }
         const result = await context.safeInvoke('import_data_archive_from_picker');
         return jsonResponse({ ok: true, ...result });
     });
@@ -95,6 +105,10 @@ export function registerExtensionRoutes(router, context, { jsonResponse }) {
         const jobId = parseJobId(body?.job_id);
         if (!jobId) return jsonResponse({ error: 'Missing job id' }, 400);
         const result = await context.safeInvoke('save_export_data_archive', { job_id: jobId });
+        if (isWebHost()) {
+            // The browser host returns a one-shot same-origin URL; saving is the browser's job.
+            return jsonResponse({ ok: true, ...createBrowserFileTransfer().downloadUrl(result.url, result.file_name) });
+        }
         return jsonResponse({ ok: true, delivered: result.delivered });
     });
 

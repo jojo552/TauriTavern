@@ -1,6 +1,7 @@
 // @ts-check
 
 import { isMobileHost } from '../../../../scripts/util/host-identity.js';
+import { isWebHost } from '../../../../tauri-bridge.js';
 import { createFileStagingService } from '../files/file-staging-service.js';
 
 /**
@@ -60,7 +61,7 @@ export function createUploadService({ safeInvoke, invoke } = {}) {
 
         // Mobile file pickers often expose scoped paths that are not directly readable by Rust.
         // Materializing into app storage keeps behavior consistent and permission-safe.
-        if (isMobileHost()) {
+        if (isMobileHost() || isWebHost()) {
             return false;
         }
 

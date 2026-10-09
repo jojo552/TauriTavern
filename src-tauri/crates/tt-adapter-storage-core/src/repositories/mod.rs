@@ -1,9 +1,11 @@
 mod file_asset_repository;
 mod file_chat_repository;
+mod file_content_repository;
 mod file_extension_store_repository;
 mod file_group_repository;
 mod file_llm_connection_repository;
 mod file_mcp_server_repository;
+mod file_preset_repository;
 mod file_prompt_cache_repository;
 mod file_quick_reply_repository;
 mod file_secret_repository;
@@ -15,10 +17,12 @@ mod file_user_repository;
 
 pub use file_asset_repository::FileAssetRepository;
 pub use file_chat_repository::FileChatRepository;
+pub use file_content_repository::FileContentRepository;
 pub use file_extension_store_repository::FileExtensionStoreRepository;
 pub use file_group_repository::FileGroupRepository;
 pub use file_llm_connection_repository::FileLlmConnectionRepository;
 pub use file_mcp_server_repository::FileMcpServerRepository;
+pub use file_preset_repository::FilePresetRepository;
 pub use file_prompt_cache_repository::FilePromptCacheRepository;
 pub use file_quick_reply_repository::FileQuickReplyRepository;
 pub use file_secret_repository::FileSecretRepository;

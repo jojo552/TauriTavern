@@ -1,3 +1,5 @@
+import { isWebHost } from '../../../tauri-bridge.js';
+import { createBrowserFileTransfer } from '../../../web/file-transfer.js';
 import { extractErrorText, resolveHostErrorResponse } from '../kernel/host-error-response.js';
 
 export function registerUserRoutes(router, context, { jsonResponse }) {
@@ -13,6 +15,11 @@ export function registerUserRoutes(router, context, { jsonResponse }) {
                 handle,
                 include_secrets: includeSecrets,
             });
+            if (isWebHost()) {
+                // The browser host returns a one-shot same-origin URL; saving is the browser's job.
+                const handoff = createBrowserFileTransfer().downloadUrl(result.url, result.file_name);
+                return jsonResponse({ ok: true, ...handoff, includes_secrets: includeSecrets });
+            }
             return jsonResponse({ ok: true, delivered: result.delivered, includes_secrets: includeSecrets });
         } catch (error) {
             const resolved = resolveHostErrorResponse(extractErrorText(error));

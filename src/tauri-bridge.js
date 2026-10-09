@@ -1,6 +1,19 @@
 // Core Tauri bridge for frontend modules.
 
 import { SILLYTAVERN_COMPAT_VERSION } from './compat-version.js';
+import { createWebTransport } from './web/transport.js';
+import { isWebHost } from './scripts/util/host-identity.js';
+
+export { isWebHost };
+
+export function isProjectHost() { return isWebHost() || detectTauriEnv(); }
+
+let webTransport;
+function getWebTransport() {
+    if (!isWebHost()) throw new Error('Web transport requires an explicit browser/web host identity');
+    webTransport ??= createWebTransport();
+    return webTransport;
+}
 
 function detectTauriEnv() {
     if (typeof window === 'undefined') {
@@ -25,6 +38,7 @@ function getTauri() {
 }
 
 function getInvokeFn() {
+    if (isWebHost()) return getWebTransport().invoke;
     const fn = getTauri()?.core?.invoke;
     return typeof fn === 'function' ? fn : null;
 }
@@ -58,7 +72,7 @@ function withTauriArgumentAliases(args) {
 }
 
 export const invoke = (...args) => {
-    const fn = getTauri()?.core?.invoke;
+    const fn = getInvokeFn();
     if (typeof fn !== 'function') {
         throw new Error('Tauri invoke is unavailable');
     }
@@ -89,6 +103,7 @@ async function invokeWithHostNormalization(command, args) {
 }
 
 export const listen = (...args) => {
+    if (isWebHost()) return getWebTransport().listen(...args);
     const fn = getTauri()?.event?.listen;
     if (typeof fn !== 'function') {
         throw new Error('Tauri listen is unavailable');
@@ -97,6 +112,7 @@ export const listen = (...args) => {
 };
 
 export function createChannel(onmessage) {
+    if (isWebHost()) return getWebTransport().createChannel(onmessage);
     const Channel = getTauri()?.core?.Channel;
     if (typeof Channel !== 'function') {
         throw new Error('Tauri Channel is unavailable');
@@ -118,6 +134,12 @@ export function isTauri() {
 }
 
 export async function initializeBridge() {
+    if (isWebHost()) {
+        await getWebTransport().start();
+        const ready = await invoke('is_ready');
+        if (ready !== true) throw new Error('Web backend is not ready');
+        return true;
+    }
     const invokeFn = getInvokeFn();
     if (!invokeFn) {
         return false;
@@ -132,6 +154,7 @@ export async function initializeBridge() {
 }
 
 export async function getCsrfToken() {
+    if (isWebHost()) return getWebTransport().csrfToken();
     return 'tauri-dummy-token';
 }
 
@@ -234,6 +257,12 @@ export async function openDialog(options = {}) {
 }
 
 export function writeClipboardText(text) {
+    if (isWebHost()) {
+        if (typeof navigator.clipboard?.writeText !== 'function') {
+            throw new Error('Browser clipboard requires a secure context and clipboard permission');
+        }
+        return navigator.clipboard.writeText(text);
+    }
     return invoke('plugin:clipboard-manager|write_text', { text });
 }
 
@@ -254,7 +283,7 @@ export async function openExternalUrl(url, openWith) {
     const href = normalizeExternalUrl(url);
     const invokeFn = getInvokeFn();
 
-    if (invokeFn) {
+    if (invokeFn && !isWebHost()) {
         return invokeFn('plugin:opener|open_url', {
             url: href,
             with: openWith,

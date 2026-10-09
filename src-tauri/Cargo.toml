@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/tauritavern",
+    "crates/tt-runtime",
+    "crates/tt-server",
     "crates/tt-domain",
     "crates/tt-contracts",
     "crates/tt-ports",
@@ -83,3 +85,11 @@ lto = true
 opt-level = "s"
 panic = "unwind"
 strip = "symbols"
+
+# The browser host is a long-running server: optimize for throughput, not download size.
+# Thin LTO keeps cross-crate inlining while bounding link memory on small build machines.
+[profile.server]
+inherits = "release"
+opt-level = 3
+lto = "thin"
+codegen-units = 16

@@ -17,20 +17,20 @@ use tt_application::services::skill_service::SkillService;
 use tt_ports::extension_tools::ExtensionTools;
 use tt_ports::workspace_shell::WorkspaceShell;
 
-use super::super::repositories::AppRepositories;
+use crate::repositories::Repositories;
 
-pub(super) struct AgentServices {
-    pub(super) agent_profile_service: Arc<AgentProfileService>,
-    pub(super) agent_profile_diagnostic_service: Arc<AgentProfileDiagnosticService>,
-    pub(super) prompt_assembly_service: Arc<PromptAssemblyService>,
-    pub(super) agent_run_history_service: Arc<AgentRunHistoryService>,
-    pub(super) agent_run_retention_automation_service: Arc<AgentRunRetentionAutomationService>,
-    pub(super) agent_runtime_service: Arc<AgentRuntimeService>,
-    pub(super) agent_workspace_lifecycle_service: Arc<AgentWorkspaceLifecycleService>,
+pub(crate) struct AgentServices {
+    pub(crate) agent_profile_service: Arc<AgentProfileService>,
+    pub(crate) agent_profile_diagnostic_service: Arc<AgentProfileDiagnosticService>,
+    pub(crate) prompt_assembly_service: Arc<PromptAssemblyService>,
+    pub(crate) agent_run_history_service: Arc<AgentRunHistoryService>,
+    pub(crate) agent_run_retention_automation_service: Arc<AgentRunRetentionAutomationService>,
+    pub(crate) agent_runtime_service: Arc<AgentRuntimeService>,
+    pub(crate) agent_workspace_lifecycle_service: Arc<AgentWorkspaceLifecycleService>,
 }
 
-pub(super) fn build(
-    repositories: &AppRepositories,
+pub(crate) fn build(
+    repositories: &Repositories,
     skill_service: Arc<SkillService>,
     chat_completion_service: Arc<ChatCompletionService>,
     llm_connection_service: Arc<LlmConnectionService>,

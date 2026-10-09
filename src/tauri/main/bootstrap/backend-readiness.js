@@ -1,8 +1,9 @@
 // @ts-check
 
+import { invoke, isWebHost } from '../../../tauri-bridge.js';
+
 export async function waitForBackendReady() {
-    const invoke = window.__TAURI__?.core?.invoke;
-    if (typeof invoke !== 'function') {
+    if (!isWebHost() && typeof window.__TAURI__?.core?.invoke !== 'function') {
         throw new Error('Tauri invoke is unavailable for backend readiness');
     }
 

@@ -31,7 +31,8 @@ Clean Architecture 是 TauriTavern 后端最重要的长期约束。它不是一
 | Application ports | `tt-ports` | repository trait、gateway trait、event sink、runtime port、Host Resource opened-source port | concrete adapter、reqwest/axum/tauri/image/zip 实现 |
 | Use cases | `tt-application` | service、use case、job coordinator、策略编排 | Tauri、adapter、reqwest、具体 tokenizer、文件格式实现 |
 | Interface adapters | `tt-adapter-*` | Tauri-free 的具体 IO、运行时、持久化、文件格式、外部系统访问 | application service、Tauri host glue |
-| Frameworks / Drivers | `tauritavern` | Tauri builder、plugins、setup、window、commands、composition root、platform glue | 领域规则、用例实现、Tauri-free repository |
+| Shared composition | `tt-runtime` | Tauri-free 的共享 repository / service 装配、`CoreServices`、宿主能力注入 | 业务规则、Tauri / HTTP transport、宿主生命周期 |
+| Frameworks / Drivers | `tauritavern`、`tt-server` | 分别承载 Tauri shell 与 axum/browser host；入口、宿主装配、资源/事件/平台 glue | 领域规则、重复用例实现、可共享的 concrete IO |
 
 这里有两个容易混淆但很关键的点：
 
@@ -49,6 +50,8 @@ src-tauri/
 ├── resources/
 └── crates/
     ├── tauritavern
+    ├── tt-runtime
+    ├── tt-server
     ├── tt-domain
     ├── tt-contracts
     ├── tt-ports
@@ -72,24 +75,26 @@ src-tauri/
 
 | crate | 当前职责 |
 | --- | --- |
-| `tauritavern` | Tauri host、presentation command、composition root、host-bound infrastructure、platform glue |
+| `tauritavern` | Tauri host、presentation command、原生宿主装配、host-bound infrastructure、platform glue |
+| `tt-runtime` | 共享 composition root、repository / service graph、`RuntimeConfig` / `HostDependencies` / `CoreServices`；不依赖 Tauri 或具体 host |
+| `tt-server` | axum/browser host、HTTP invoke / SSE / 资源 / 文件交付；复用 `tt-runtime`，不依赖 Tauri |
 | `tt-domain` | 领域模型、值对象、领域错误、纯规则 |
 | `tt-contracts` | DTO、事件、payload、通用值契约、observability contract |
 | `tt-ports` | repository / gateway / runtime trait、Host Resource opened-source port |
 | `tt-application` | 用例服务、业务编排、任务协调、policy 执行 |
-| `tt-adapter-http` | 共享 HTTP client pool/profile/helper |
+| `tt-adapter-http` | 共享 HTTP client pool/profile/helper、GitHub 更新查询、外部导入下载器 |
 | `tt-adapter-mcp` | RMCP client、协议版本策略与 Streamable HTTP lifecycle、tools/list pagination 与 tool validation |
 | `tt-adapter-provider-http` | LLM、SearXNG、SD、Translate、TTS、embedding、provider metadata 的 HTTP repository |
 | `tt-adapter-triviumdb` | 按命名空间管理 TriviumDB、阻塞执行、原生查询与持久化 |
 | `tt-adapter-vector` | Vector 的 ACID 本地索引与本地 embedding runtime；不承载 provider HTTP |
 | `tt-adapter-tokenization` | tokenizer concrete repository |
-| `tt-adapter-storage-core` | `DataDirectory`、基础文件系统与格式 helper、chat/settings/user/theme/secret/quick reply/prompt cache/asset/llm connection/extension-store |
+| `tt-adapter-storage-core` | `DataDirectory`、基础文件系统与格式 helper、chat/settings/user/theme/secret/quick reply/prompt cache/asset/llm connection/extension-store；基于 `BundledResources` 的 content/preset IO 与目录资源实现 |
 | `tt-adapter-storage-userdata` | character、world info、agent workspace、agent profile、skill local package store、PNG card metadata |
 | `tt-adapter-media` | persona/avatar/background/user media/image metadata、browser-visible host resource file store |
 | `tt-adapter-extension` | third-party extension 发现、安装、版本检查、更新、分支查询/切换、删除与移动；Gitoxide smart HTTP 与 embedded worktree |
 | `tt-adapter-workspace-shell` | Bashkit（含 jq/Python）与 QuickJS 执行；受限 `WorkspaceFs` 适配 |
 | `tt-adapter-sync` | LAN Sync、TT-Sync v2 runtime、stores、client/server、sync jobs |
-| `tt-adapter-archive` | data archive import/export executor、archive path safety |
+| `tt-adapter-archive` | data archive import/export executor、job staging file gateway、archive path safety |
 
 ## 4. 依赖方向
 
@@ -97,15 +102,19 @@ src-tauri/
 
 ```mermaid
 flowchart TB
-    host["tauritavern<br/>Tauri host / commands / composition root"]
+    host["tauritavern / tt-server<br/>Tauri / browser host glue"]
+    runtime["tt-runtime<br/>shared composition / CoreServices"]
     adapters["tt-adapter-*<br/>concrete IO / runtime / file formats"]
     application["tt-application<br/>use cases / services / policies"]
     ports["tt-ports<br/>ports required by use cases"]
     contracts["tt-contracts<br/>DTO / events / payloads"]
     domain["tt-domain<br/>models / errors / pure rules"]
 
+    host --> runtime
     host --> application
     host --> adapters
+    runtime --> application
+    runtime --> adapters
     application --> ports
     application -. may use .-> contracts
     application -. may use .-> domain
@@ -115,6 +124,8 @@ flowchart TB
     ports --> contracts
     contracts --> domain
 ```
+
+`tt-runtime` 是外层装配，不是 application 的基础设施。两个 host 通过它复用同一业务服务图，仍可为宿主资源、归档、更新等显式装配 application service 与 concrete adapter；这些宿主 glue 不另建一套业务后端。
 
 当前允许少量 adapter helper 关系：
 
@@ -134,7 +145,9 @@ tt-adapter-media            -> tt-adapter-storage-core
 - `tt-ports` 不依赖 adapter、Tauri、网络/文件系统具体实现。
 - `tt-application` 不依赖任何 `tt-adapter-*`、`tauritavern`、`reqwest`、`axum`、`tauri`、`zip`、`image`。
 - 任何 `tt-adapter-*` 不依赖 `tt-application` 或 `tauritavern`。
-- host 的 `infrastructure` 与 `platform` 不下沉为 application 或 adapter 的隐式依赖；具体服务装配集中在 `app/composition`。
+- domain、contracts、ports、application 与 adapter 均不依赖 `tt-runtime` 或 `tt-server`；依赖不能反向指向 composition 或 host。
+- `tt-runtime` 与 `tt-server` 不依赖 `tauri` 或 `tauritavern`，`tt-runtime` 也不依赖 `tt-server`；server 必须保留共享 runtime 的正常依赖。
+- host 的 infrastructure / platform / transport 不下沉为 application 或 adapter 的隐式依赖；共享服务图集中在 `tt-runtime`，宿主额外装配留在各自入口附近。
 
 如果新增代码需要违反这些方向，通常不是边界脚本太严格，而是抽象落点还没有想清楚。
 
@@ -157,8 +170,9 @@ SillyTavern frontend / extension / script
   -> src/tauri/main/interceptors.js
   -> src/tauri/main/routes/*
   -> context.safeInvoke(...)
-  -> tauritavern presentation command
-  -> tt-application service
+  -> Tauri invoke -> tauritavern presentation command
+     或 browser HTTP invoke -> tt-server commands / host transport
+  -> 同一 tt-application service（共享服务由 tt-runtime 装配）
   -> tt-ports trait
   -> tt-adapter-* concrete implementation
 ```
@@ -167,7 +181,7 @@ SillyTavern frontend / extension / script
 
 ## 6. Host 边界
 
-`tauritavern` 是最外层 host crate。它可以知道所有 concrete implementation，但只应在明确边界处使用它们。
+`tauritavern` 与 `tt-server` 是最外层 host crate，分别服务 Tauri WebView 与浏览器。它们可以知道 concrete implementation，但只应在启动/装配与明确的宿主 glue 边界使用；共同服务图不在两边重复构造。
 
 主要目录：
 
@@ -177,14 +191,16 @@ src-tauri/crates/tauritavern/src/
 ├── main.rs                # desktop entry
 ├── app/
 │   ├── host/              # Tauri builder、plugin、setup、window、resources、shutdown
-│   ├── composition.rs     # composition root 入口
-│   ├── composition/       # repositories、services、host adapters 装配
-│   ├── state.rs           # AppState / AppServices / lifecycle handles
+│   ├── composition.rs     # 转入共享 runtime 的原生宿主装配入口
+│   ├── composition/       # sync/archive/update 与 Tauri host adapters 装配
+│   ├── state.rs           # AppServices 包含 CoreServices 与宿主服务；AppState / lifecycle
 │   └── startup_profile.rs # 启动期 settings / policy snapshot
 ├── presentation/          # Tauri commands、CommandError、web resource adapter
 ├── infrastructure/        # Tauri-bound infrastructure
 └── platform/              # 宿主身份、iOS/UIKit、macOS/WebView、native UI glue
 ```
+
+共享装配在 [tt-runtime/lib.rs](../src-tauri/crates/tt-runtime/src/lib.rs)（配置/宿主依赖/服务包入口）、[repositories.rs](../src-tauri/crates/tt-runtime/src/repositories.rs)、[services.rs](../src-tauri/crates/tt-runtime/src/services.rs) 与 [agent.rs](../src-tauri/crates/tt-runtime/src/agent.rs)。浏览器入口在 [tt-server/main.rs](../src-tauri/crates/tt-server/src/main.rs)；[host.rs](../src-tauri/crates/tt-server/src/host.rs)、[commands.rs](../src-tauri/crates/tt-server/src/commands.rs) 及其子模块、[events.rs](../src-tauri/crates/tt-server/src/events.rs)、[resources.rs](../src-tauri/crates/tt-server/src/resources.rs) 与文件交付模块只承担浏览器宿主边界。
 
 ### 6.1 Host shell
 
@@ -198,39 +214,44 @@ src-tauri/crates/tauritavern/src/
 
 这里可以触碰 `tauri::AppHandle`、window、plugin、platform API。这里不写业务用例。
 
+`tt-server/src/main.rs` 负责 CLI 路径/启动快照、共享 runtime 装配、后台 worker 启停与 axum listener；浏览器宿主负责认证、页面会话、HTTP invoke/SSE、资源响应与上传/下载，不创建 WebView 或模拟 Tauri plugin。两个宿主都在就绪前初始化默认内容，并拥有任务取消与退出生命周期。
+
 ### 6.2 Composition root
 
-`app/composition/*` 是唯一可以同时知道 application service 与 concrete adapter 的地方。
+`tt-runtime::build` 是共享 composition root：宿主提供 `RuntimeConfig` 启动快照与 `HostDependencies`（资源读取、HTTP pool、completion repository、后台能力、shell、扩展工具等），runtime 显式构造同一 repository / application service graph，返回 `CoreServices`，不负责启动宿主后台任务。
+
+Tauri 的 `app/composition/services` 调它后，把 `CoreServices` 与 sync/archive/update 服务装入薄 `AppServices`；server 的 `main.rs` 同样调用它，再把共享服务与 archive/update、模板/媒体/资源服务及浏览器状态装入 `Host`。归档执行与更新查询两边复用相同 adapter；目前 LAN/TT Sync 与同步自动化只在 Tauri host 装配，不能把它们或原生窗口/分享能力伪装为浏览器已有能力。
 
 维护规则：
 
 - command 不直接构造 repository。
 - service 不直接构造 concrete adapter。
 - adapter 不调用 application service。
-- `AppState` 只持有长期运行的 service 包、lifecycle handle 和启动期策略快照，不作为全局 service locator 下沉到 application 或 adapter。
+- 同一共享服务只在 `tt-runtime` 装配；宿主 composition 只注入真实差异并补充宿主服务，不复制业务图。
+- `CoreServices`、`AppState` / `AppServices` 与 server `Host` 都不作为全局 service locator 下沉到 application 或 adapter；任务生命周期由各宿主持有。
 
 ### 6.3 Host-bound infrastructure
 
-只有确实依赖 `AppHandle`、WebView、Tauri plugin、bundled resources、runtime path、平台 API 或 host lifecycle 的代码才留在 `tauritavern/src/infrastructure` 或 `platform`。
+只有确实依赖 `AppHandle`、WebView、Tauri plugin、资源打包访问、runtime path、平台 API 或 host lifecycle 的 glue 才留在 `tauritavern/src/infrastructure` 或 `platform`。仅仅读取默认内容并不等于 Tauri-bound：资源来源通过 `tt-ports::bundled_resources::BundledResources` 注入。
 
 当前合理留在 host 的例子：
 
 - runtime path 和数据目录选择引导配置。
-- bundled resource 读取。
+- `BundledResourceStore` 的 AppHandle / packaged-resource 访问。
 - logging / Dev observability 中需要 Tauri event 或 AppHandle 的部分。
-- Data Archive 的 Tauri file picker/share glue。
-- `file_content_repository` 与 `file_preset_repository`，因为它们仍依赖 packaged default content / bundled resources。
-- 小型 host-bound API glue，例如更新检查和外部导入下载器。
+- Data Archive 的 Tauri file picker/share glue，与 native sync 的 dialog/event/platform glue。
+
+已经迁出的共享 IO：`FileContentRepository`、`FilePresetRepository` 与 `DirectoryBundledResources` 在 `tt-adapter-storage-core`；`GitHubUpdateRepository`、`HttpExternalImportDownloader` 在 `tt-adapter-http`；`FileDataArchiveGateway` 与 executor 在 `tt-adapter-archive`。宿主只选择资源来源、注入路径/版本/能力，并处理交付：Tauri picker/share 与浏览器 staged upload / 一次性下载是不同 glue，不是不同归档实现。
 
 新的 Tauri-free repository 不应再放回 host infrastructure。
 
 ### 6.4 平台事实
 
-编译目标只在 host crate 读取：`platform/identity.rs` 的 `HOST_IDENTITY`（`HostPlatform` + `HostKind`，类型在 `tt-contracts::host`）是唯一来源，同时注入前端（见 `docs/FrontendHostContract.md` §2.2）。
+原生编译目标的行为事实只在 Tauri host 读取：`tauritavern/src/platform/identity.rs` 的 `HOST_IDENTITY`（`HostPlatform` + `HostKind`，类型在 `tt-contracts::host`）是原生唯一来源，同时注入前端。浏览器宿主由 `tt-server/src/host.rs` 注入 `{ platform: 'browser', kind: 'web' }`，不把 server 所在操作系统冒充为浏览器平台（见 `docs/FrontendHostContract.md` §2.2）。
 
 - `HostKind` 取 Tauri 的 `desktop` / `mobile` 编译别名，与命令和插件的门控一致。OpenHarmony 的 `target_os` 是 `linux`，以 `target_env = "ohos"` 区分。
-- host 内外壳类别用 `cfg(desktop)` / `cfg(mobile)`，系统 API 用 `target_os` / `target_env`。`Cargo.toml` 的 target 依赖表看不到这两个别名，是唯一需要写完整平台组合的地方。
-- 非 host crate 不读平台（`desktop` / `mobile` 在那里恒为假），cfg 只用于依赖或系统 API 能否编译；行为差异由 composition root 注入事实（如 `HostKind`）或数值（如 IPC 帧预算）。
+- Tauri host 内外壳类别用 `cfg(desktop)` / `cfg(mobile)`，系统 API 用 `target_os` / `target_env`。`Cargo.toml` 的 target 依赖表看不到这两个别名，是唯一需要写完整平台组合的地方。
+- 共享 runtime 与内层 crate 不读宿主平台（Tauri 的 `desktop` / `mobile` 在那里恒为假），cfg 只用于依赖或系统 API 能否编译；行为差异由宿主 composition 注入事实（如 `HostKind`）、能力或数值（如提交帧预算）。
 - 为每个平台选择实现时，`match` 列出全部平台、不写通配；某个平台独有的处理用正向条件。
 
 `pnpm run check:platform` 检查各 crate 源码是否遵守以上约束，报错指向本节。
@@ -253,7 +274,7 @@ adapter 是外层细节，但不是可以任意堆放的 common bucket。一个 
 
 ## 8. Presentation 边界
 
-`presentation` 是前端可调用的 Tauri command 与 WebView resource 边界。
+`tauritavern/src/presentation` 是 Tauri command 与 WebView resource 边界；`tt-server/src/commands.rs` 及其子模块、`host.rs`、`events.rs` 与 `resources.rs` 是对应的浏览器 HTTP invoke / SSE / 资源边界。两边只映射参数、宿主状态、错误与输出，复用 application service，不各自实现用例。
 
 规则：
 
@@ -272,18 +293,20 @@ adapter 是外层细节，但不是可以任意堆放的 common bucket。一个 
 | 新 repository/gateway/runtime trait | `tt-ports` | trait 面向 application；具体实现不在这里 |
 | 新用例、业务编排、job coordinator | `tt-application` | 依赖 port，不依赖 adapter |
 | 新 Tauri command | `tauritavern/src/presentation/commands` | 调 service，不直接操作仓储细节 |
-| 新 service/adapter 装配 | `tauritavern/src/app/composition` | 显式构造，避免 DI 容器或自动注册魔法 |
+| 新共享 service/adapter 装配 | `tt-runtime/src/{repositories,services,agent}.rs` | 显式构造同一图，避免 DI 容器或宿主平行实现 |
+| 宿主能力注入/额外服务装配 | `tauritavern/src/app/composition` 或 `tt-server/src/main.rs` | 调共享 runtime，保留真实资源/平台/transport 差异 |
+| 新浏览器 invoke / SSE / 资源边界 | `tt-server/src/commands.rs` / `commands/*`、`host.rs`、`events.rs`、`resources.rs` | 调 service；不依赖 Tauri，不重写业务流程 |
 | 需要 AppHandle/WebView/plugin/platform API | `tauritavern/src/app`、`infrastructure` 或 `platform` | 不下沉到 adapter |
 | 按平台区分的行为 | `tauritavern/src/app/composition` 注入 | 非 host crate 不读平台，见 §6.4 |
-| data root/default-user 的基础文件仓储 | `tt-adapter-storage-core` | chat/settings/user/theme/secret 等基础存储 |
+| data root/default-user 的基础文件仓储 | `tt-adapter-storage-core` | chat/settings/user/theme/secret、content/preset 等；资源通过 `BundledResources` 注入 |
 | 角色卡、世界书、Agent workspace/profile、Skill package | `tt-adapter-storage-userdata` | skill 是 local package store，不是普通 JSON repo |
 | 第三方扩展安装、更新、发现 | `tt-adapter-extension` | 不归入 storage-userdata |
 | avatar/background/user media/host resource 文件读取 | `tt-adapter-media` | 保持浏览器资源契约 |
 | LLM/SearXNG/SD/Translate/TTS/provider metadata/embedding HTTP | `tt-adapter-provider-http` | 复用 `tt-adapter-http` |
 | Vector 索引与本地 embedding runtime | `tt-adapter-vector` | 独立持久化/推理依赖，不下沉到 storage-core |
-| 通用 HTTP pool/profile/helper | `tt-adapter-http` | 不放 provider 业务规则 |
+| HTTP pool/profile/helper、更新查询、外部导入下载 IO | `tt-adapter-http` | 不放 provider 用例或宿主 UI glue |
 | LAN/TT Sync runtime | `tt-adapter-sync` | Tauri event/UI adapter 留 host composition |
-| Data Archive import/export executor | `tt-adapter-archive` | Tauri picker/share 留 host infrastructure |
+| Data Archive executor / staging gateway | `tt-adapter-archive` | 两个宿主复用；picker/share 或 browser upload/download 留各自宿主 |
 | 工作区 Shell、jq、Python 与 JavaScript 执行 | `tt-adapter-workspace-shell` | 依赖 `WorkspaceShell` / `WorkspaceFs` port，复用调用方的文件范围；不接触物理路径 |
 
 ## 10. 添加后端能力的最小流程
@@ -297,8 +320,8 @@ adapter 是外层细节，但不是可以任意堆放的 common bucket。一个 
 5. 如有外部 IO 或持久化边界，在 `tt-ports` 定义最小 trait。
 6. 在 `tt-application` 写 service/use case。
 7. 在合适的 `tt-adapter-*` 写 concrete implementation。
-8. 在 `tauritavern/src/app/composition` 装配。
-9. 在 `tauritavern/src/presentation` 增加 command。
+8. 共享能力在 `tt-runtime` 装配；宿主在 Tauri composition 或 server `main.rs` 注入能力并补充宿主服务。
+9. 按入口需要在 Tauri `presentation` 或 server command/transport 增加薄边界，不复制用例。
 10. 在前端 route 或 Host ABI 层接入。
 11. 更新相关文档和 guard/test。
 
@@ -381,7 +404,8 @@ pnpm run test:contracts
 - 不要把 Clean Architecture 理解成“多建几层目录”。真正的边界是依赖方向和变化原因。
 - 不要把 repository trait 放回 `tt-domain`。
 - 不要让 `tt-application` 依赖 concrete adapter。
-- 不要让 adapter 依赖 `tauritavern`、`AppState` 或 presentation command。
+- 不要让内层或 adapter 依赖 `tauritavern`、`tt-runtime`、`tt-server`、`AppState` / `Host` 或 presentation command；共享装配不是下层 service locator。
+- 不要在 Tauri 与 browser host 各自重建共享服务图，也不要为 browser 能力伪装 Tauri plugin 或原生平台事实。
 - 不要把 Tauri-free 文件仓储塞回 host infrastructure。
 - 不要把 `tt-adapter-storage-core` 变成新的 common 大桶。
 - 不要为了两个 ZIP 调用提前抽一个泛化 `common-archive` crate；等第三个真实 bounded context 出现再说。

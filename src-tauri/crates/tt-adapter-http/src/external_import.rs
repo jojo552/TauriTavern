@@ -7,7 +7,7 @@ use reqwest::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderMap, HeaderName};
 use tokio::io::{AsyncWriteExt, BufWriter};
 use url::Url;
 
-use tt_adapter_http::{HttpClientPool, HttpClientProfile};
+use crate::{HttpClientPool, HttpClientProfile};
 use tt_domain::errors::DomainError;
 use tt_ports::external_import::{
     DownloadByteLimit, DownloadedBytes, DownloadedFile, ExternalImportDownloader,

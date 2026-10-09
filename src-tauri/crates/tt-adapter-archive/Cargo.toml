@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+chrono = { workspace = true }
 encoding_rs = "0.8"
 flate2 = "1.1.9"
 serde_json = { workspace = true }
@@ -19,4 +20,5 @@ tt-ports = { path = "../tt-ports" }
 
 [dev-dependencies]
 base64 = "0.23"
+filetime = "0.2"
 rand = { workspace = true }

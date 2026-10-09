@@ -1,0 +1,43 @@
+[package]
+name = "tt-server"
+version = "2.3.0"
+edition = "2024"
+description = "Native HTTP/browser host for the shared TauriTavern Rust runtime"
+
+[dependencies]
+axum = { version = "0.8", features = ["http1", "json", "tokio"] }
+async-trait = "0.1"
+base64 = "0.23"
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+http = "1"
+mime_guess = "2"
+percent-encoding = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-zstd", "fs", "set-header"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { workspace = true }
+url = { workspace = true }
+tt-runtime = { path = "../tt-runtime" }
+tt-domain = { path = "../tt-domain" }
+tt-contracts = { path = "../tt-contracts" }
+tt-ports = { path = "../tt-ports" }
+tt-application = { path = "../tt-application" }
+tt-adapter-http = { path = "../tt-adapter-http" }
+tt-adapter-archive = { path = "../tt-adapter-archive" }
+tt-adapter-media = { path = "../tt-adapter-media" }
+tt-adapter-provider-http = { path = "../tt-adapter-provider-http" }
+tt-adapter-storage-core = { path = "../tt-adapter-storage-core" }
+tt-adapter-workspace-shell = { path = "../tt-adapter-workspace-shell" }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

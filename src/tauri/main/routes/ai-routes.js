@@ -5,7 +5,8 @@ import { getSillyTavernLocale, translateSillyTavern } from '../adapters/st/silly
 import { createGenerationLifecycleService } from '../services/ai/generation-lifecycle-service.js';
 import { createGenerationStatusBridge } from '../services/ai/generation-status-bridge.js';
 import { consumeChatCompletionStream } from '../services/ai/chat-completion-stream-consumer.js';
-import { createSystemNotificationService } from '../services/notifications/system-notification-service.js';
+import { createBrowserNotificationInvoke, createSystemNotificationService } from '../services/notifications/system-notification-service.js';
+import { isWebHost } from '../../../tauri-bridge.js';
 import {
     asUpstreamFailureDetails,
     buildLegacyErrorPayload,
@@ -633,7 +634,7 @@ async function createChatCompletionStreamResponse(context, payload, signal, life
 
 export function registerAiRoutes(router, context, { jsonResponse }) {
     const notificationService = createSystemNotificationService({
-        safeInvoke: context.safeInvoke,
+        safeInvoke: isWebHost() ? createBrowserNotificationInvoke() : context.safeInvoke,
         confirmPermissionRationale: confirmAiNotificationPermissionRationale,
     });
     const generationLifecycleService = createGenerationLifecycleService({

@@ -53,15 +53,25 @@ impl ChatCommitService {
         allow_not_found: bool,
     ) -> Result<Option<Box<dyn ByteReader>>, ApplicationError> {
         validate_chat_history_locator(&locator)?;
-        match self
-            .repository
-            .open_payload_json(target_from_locator(locator))
-            .await
-        {
-            Ok(reader) => Ok(Some(reader)),
-            Err(tt_domain::errors::DomainError::NotFound(_)) if allow_not_found => Ok(None),
-            Err(error) => Err(error.into()),
-        }
+        let target = target_from_locator(locator);
+        optional(
+            self.repository.open_payload_json(target).await,
+            allow_not_found,
+        )
+    }
+
+    /// Hosts without a scoped file-handle transport stream the stored JSONL unchanged.
+    pub async fn open_payload_jsonl(
+        &self,
+        locator: ChatHistoryLocator,
+        allow_not_found: bool,
+    ) -> Result<Option<Box<dyn ByteReader>>, ApplicationError> {
+        validate_chat_history_locator(&locator)?;
+        let target = target_from_locator(locator);
+        optional(
+            self.repository.open_payload_jsonl(target).await,
+            allow_not_found,
+        )
     }
 
     pub async fn open_swipe_source(
@@ -70,15 +80,11 @@ impl ChatCommitService {
         allow_not_found: bool,
     ) -> Result<Option<Arc<dyn ChatSwipeSource>>, ApplicationError> {
         validate_chat_history_locator(&locator)?;
-        match self
-            .repository
-            .open_swipe_source(target_from_locator(locator))
-            .await
-        {
-            Ok(source) => Ok(Some(source)),
-            Err(tt_domain::errors::DomainError::NotFound(_)) if allow_not_found => Ok(None),
-            Err(error) => Err(error.into()),
-        }
+        let target = target_from_locator(locator);
+        optional(
+            self.repository.open_swipe_source(target).await,
+            allow_not_found,
+        )
     }
 
     pub async fn append(
@@ -105,6 +111,17 @@ impl ChatCommitService {
 
     pub async fn abort(&self, session_id: &str) -> Result<(), ApplicationError> {
         Ok(self.repository.abort(session_id).await?)
+    }
+}
+
+fn optional<T>(
+    result: Result<T, tt_domain::errors::DomainError>,
+    allow_not_found: bool,
+) -> Result<Option<T>, ApplicationError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(tt_domain::errors::DomainError::NotFound(_)) if allow_not_found => Ok(None),
+        Err(error) => Err(error.into()),
     }
 }
 

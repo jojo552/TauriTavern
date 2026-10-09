@@ -1,4 +1,4 @@
-import { isTauri } from '../tauri-bridge.js';
+import { isProjectHost } from '../tauri-bridge.js';
 import { loadPersonaSnapshot } from './tauri/setting/settings-persistence.js';
 import {
     buildAvatarList,
@@ -303,7 +303,7 @@ export async function getUserAvatars(doRender = true, openPageAt = '') {
     if (primedUserAvatars !== null) {
         userAvatars = primedUserAvatars;
         primedUserAvatars = null;
-    } else if (isTauri()) {
+    } else if (isProjectHost()) {
         userAvatars = await loadPersonaSnapshot(power_user);
     } else {
         const response = await fetch('/api/avatars/get', {

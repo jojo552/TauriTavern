@@ -1,3 +1,5 @@
+import { isWebHost } from '../../util/host-identity.js';
+
 const TAURI_MAIN_READY_KEY = '__TAURITAVERN_MAIN_READY__';
 const READY_PROMISE_WAIT_TIMEOUT_MS = 7000;
 const READY_PROMISE_POLL_INTERVAL_MS = 50;
@@ -7,7 +9,8 @@ function isTauriRuntime() {
         return false;
     }
 
-    return window.__TAURI_RUNNING__ === true
+    return isWebHost()
+        || window.__TAURI_RUNNING__ === true
         || window.__TAURI_INTERNALS__ !== undefined
         || typeof window.__TAURI__?.core?.invoke === 'function';
 }
@@ -44,7 +47,7 @@ export async function waitForTauriMainReady({ failFast = false } = {}) {
     try {
         await registration.readyPromise;
     } catch (error) {
-        if (failFast) {
+        if (failFast || isWebHost()) {
             throw error;
         }
         // Continue with fallback URL behavior.

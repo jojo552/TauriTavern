@@ -182,6 +182,14 @@ impl ChatCommitRepository for FileChatRepository {
         super::payload_reader::open_json_array(&path).await
     }
 
+    async fn open_payload_jsonl(
+        &self,
+        target: ChatCommitTarget,
+    ) -> Result<Box<dyn tt_ports::byte_reader::ByteReader>, DomainError> {
+        let path = self.resolve_chat_commit_target(&target).await?;
+        super::payload_reader::open_jsonl(&path).await
+    }
+
     async fn open_swipe_source(
         &self,
         target: ChatCommitTarget,

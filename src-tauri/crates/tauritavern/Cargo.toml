@@ -44,13 +44,13 @@ url = { workspace = true }
 percent-encoding = "2"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 mime_guess = "2.0.5"
-filetime = "0.2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 dunce = "1"
 tt-domain = { path = "../tt-domain" }
 tt-contracts = { path = "../tt-contracts" }
 tt-ports = { path = "../tt-ports" }
 tt-application = { path = "../tt-application" }
+tt-runtime = { path = "../tt-runtime" }
 tt-adapter-http = { path = "../tt-adapter-http" }
 tt-adapter-mcp = { path = "../tt-adapter-mcp" }
 tt-adapter-tokenization = { path = "../tt-adapter-tokenization" }

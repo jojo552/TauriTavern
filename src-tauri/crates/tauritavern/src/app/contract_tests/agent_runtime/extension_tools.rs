@@ -1,12 +1,22 @@
 use super::*;
 
-use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::sync::mpsc;
 use tt_application::dto::agent_dto::{AgentCancelRunDto, AgentReadSessionDto, AgentSaveProfileDto};
+use tt_contracts::extension_tools::ExtensionToolEvent;
 use tt_contracts::extension_tools::{ExtensionToolDefinition, ExtensionToolReply};
 use tt_domain::models::tool::{AgentToolScope, ToolId};
+use tt_ports::extension_tools::ExtensionToolEventSink;
 
 use super::session::{configure_session_profile, prepare_input, wait_until_session_idle};
+
+struct TestSink(mpsc::UnboundedSender<Value>);
+
+impl ExtensionToolEventSink for TestSink {
+    fn send(&self, event: ExtensionToolEvent) -> Result<(), String> {
+        let value = serde_json::to_value(event).map_err(|error| error.to_string())?;
+        self.0.send(value).map_err(|error| error.to_string())
+    }
+}
 
 fn register_tool(
     fixture: &AgentRuntimeFixture,
@@ -15,13 +25,7 @@ fn register_tool(
     contexts: Vec<AgentToolScope>,
 ) -> (ToolId, mpsc::UnboundedReceiver<Value>) {
     let (sender, receiver) = mpsc::unbounded_channel();
-    let channel = Channel::new(move |body| {
-        let InvokeResponseBody::Json(body) = body else {
-            panic!("expected JSON tool event")
-        };
-        sender.send(serde_json::from_str(&body).unwrap()).unwrap();
-        Ok(())
-    });
+    let sink: Arc<dyn ExtensionToolEventSink> = Arc::new(TestSink(sender));
     let id = fixture.extension_tools.register("main", ExtensionToolDefinition {
         extension_id: extension_id.into(),
         name: name.into(),
@@ -29,7 +33,7 @@ fn register_tool(
         input_schema: json!({"type": "object", "properties": {"query": {"type": "string"}}}),
         contexts,
         enabled: true,
-    }, channel).unwrap();
+    }, sink).unwrap();
     (id, receiver)
 }
 

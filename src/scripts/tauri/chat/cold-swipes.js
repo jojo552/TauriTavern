@@ -1,4 +1,4 @@
-import { invoke } from '../../../tauri-bridge.js';
+import { invoke, isWebHost } from '../../../tauri-bridge.js';
 import { createReadableFileStreamService } from '../../../tauri/main/services/files/readable-file-stream-service.js';
 import { jsonlStreamToPayload } from './jsonl.js';
 
@@ -18,7 +18,7 @@ export function coldSwipesEnabled() {
 function closeSource(sourceId) {
     if (sourceId === undefined) return;
     // Cleanup cannot invalidate a successfully loaded chat. Reload also closes page resources natively.
-    void invoke('plugin:resources|close', { rid: sourceId }).catch(error => {
+    void invoke(isWebHost() ? 'close_resource' : 'plugin:resources|close', { rid: sourceId }).catch(error => {
         console.warn('Failed to close cold swipe source', error);
     });
 }

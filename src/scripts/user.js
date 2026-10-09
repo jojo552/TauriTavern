@@ -1,4 +1,5 @@
 import { getRequestHeaders } from '../script.js';
+import { isWebHost } from '../tauri-bridge.js';
 import { POPUP_RESULT, POPUP_TYPE, callGenericPopup } from './popup.js';
 import { canViewSecrets } from './secrets.js';
 import { renderTemplateAsync } from './templates.js';
@@ -263,13 +264,16 @@ async function readBackupFailureMessage(response) {
     }
 }
 
+/** Project hosts (native or browser) build the archive in Rust; plain SillyTavern streams it. */
 function isTauriRuntime() {
-    return globalThis.__TAURI_RUNNING__ === true;
+    return globalThis.__TAURI_RUNNING__ === true || isWebHost();
 }
 
 function showNativeBackupResult(payload) {
     if (payload.delivered) {
         toastr.success('User backup exported.', 'Backup Complete');
+    } else if (payload.status === 'handed-off') {
+        toastr.info('The backup download was handed to the browser.', 'Backup Download Started');
     }
 }
 

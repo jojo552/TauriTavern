@@ -1,5 +1,7 @@
 // @ts-check
 
+import { isWebHost } from '../../../../tauri-bridge.js';
+
 // Amortize IPC roundtrips while bounding each response and decode burst.
 const FS_READ_MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 
@@ -38,7 +40,7 @@ export function createReadableFileStreamService({ invoke }) {
 
             closed = true;
             const rid = await ridPromise;
-            await invoke('plugin:resources|close', { rid });
+            await invoke(isWebHost() ? 'close_resource' : 'plugin:resources|close', { rid });
         }
 
         return new ReadableStream({
@@ -75,6 +77,7 @@ export function createReadableFileStreamService({ invoke }) {
 
     /** @param {string} filePath */
     function createReadableFileStream(filePath) {
+        if (isWebHost()) throw new Error('Browser file access requires a File or an opaque HTTP download URL, not a host disk path');
         /** @type {number | undefined} */
         let remaining;
         return createReadableResourceStream(

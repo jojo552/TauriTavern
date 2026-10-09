@@ -1,6 +1,8 @@
 // @ts-check
 
 import { createFileStagingService } from '../services/files/file-staging-service.js';
+import { isWebHost } from '../../../tauri-bridge.js';
+import { createBrowserFileTransfer } from '../../../web/file-transfer.js';
 
 const CHARACTER_CARD_EXTENSIONS = ['json', 'png'];
 const CHARACTER_CARD_EXTENSION_SET = new Set(CHARACTER_CARD_EXTENSIONS);
@@ -102,6 +104,14 @@ export function installCharacterCardsApi(context) {
         hostAbi.api = {};
     }
 
+    if (isWebHost()) {
+        const files = createBrowserFileTransfer();
+        hostAbi.api.characterCards = {
+            isNativePickerAvailable: () => true,
+            pickFiles: options => files.pickFiles({ ...options, kind: 'character-card' }),
+        };
+        return;
+    }
     hostAbi.api.characterCards = createCharacterCardsApi({
         safeInvoke: context?.safeInvoke,
         createReadableFileStream: context?.createReadableFileStream,

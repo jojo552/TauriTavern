@@ -5,9 +5,19 @@ use tt_contracts::extension_tools::{
     ExtensionToolDefinition, ExtensionToolEvent, ResolveExtensionToolCallDto,
     SetExtensionToolEnabledDto,
 };
+use tt_ports::extension_tools::ExtensionToolEventSink;
+use tt_runtime::extension_tools::AgentExtensionTools;
 
-use crate::infrastructure::agent_extension_tools::AgentExtensionTools;
 use crate::presentation::errors::CommandError;
+
+/// The WebView IPC channel is how the native host delivers tool events to a page.
+struct ChannelSink(Channel<ExtensionToolEvent>);
+
+impl ExtensionToolEventSink for ChannelSink {
+    fn send(&self, event: ExtensionToolEvent) -> Result<(), String> {
+        self.0.send(event).map_err(|error| error.to_string())
+    }
+}
 
 #[tauri::command]
 pub(crate) fn register_agent_extension_tool(
@@ -16,7 +26,7 @@ pub(crate) fn register_agent_extension_tool(
     webview: Webview,
     tools: State<'_, Arc<AgentExtensionTools>>,
 ) -> Result<(), CommandError> {
-    tools.register(webview.label(), definition, channel)?;
+    tools.register(webview.label(), definition, Arc::new(ChannelSink(channel)))?;
     Ok(())
 }
 

@@ -399,9 +399,8 @@ export function createSkillManagerController(deps: SkillManagerDeps): SkillManag
 
     async function exportSkill(sectionId: SkillSectionId, skill: TauriTavernSkillIndexEntry): Promise<void> {
         const source = availableSection(sectionId);
-        if (await exportSkillArchive(deps, source.scope, skill)) {
-            deps.toastSuccess(deps.tr('exportedSkill', { name: skill.name }));
-        }
+        const result = await exportSkillArchive(deps, source.scope, skill);
+        await deps.notifyExportResult(result);
     }
 
     async function deleteSkill(sectionId: SkillSectionId, skill: TauriTavernSkillIndexEntry): Promise<void> {

@@ -1,6 +1,6 @@
 import { installWindowLayout } from '../../scripts/util/window-layout.js';
 import { installWindowBackdrop } from '../../scripts/window-backdrop.js';
-import { invoke, isTauri as isTauriRuntime } from '../../tauri-bridge.js';
+import { invoke, isProjectHost, isWebHost } from '../../tauri-bridge.js';
 import { eventSource, event_types } from '../../scripts/events.js';
 import { createTauriMainContext } from './context.js';
 import { createDownloadBridge } from './download-bridge.js';
@@ -151,7 +151,7 @@ function installSameOriginWindowPatches(interceptors, downloadBridge, { runtimeC
 
         interceptors.patchFetch(targetWindow);
         interceptors.patchJQueryAjax(targetWindow);
-        downloadBridge.patchWindow(targetWindow);
+        downloadBridge?.patchWindow(targetWindow);
     };
 
     const watchIframe = (iframeElement) => {
@@ -231,7 +231,7 @@ function installSameOriginWindowPatches(interceptors, downloadBridge, { runtimeC
 }
 
 export function bootstrapTauriMain() {
-    if (!isTauriRuntime() || bootstrapped) {
+    if (!isProjectHost() || bootstrapped) {
         return;
     }
     bootstrapped = true;
@@ -332,7 +332,9 @@ export function bootstrapTauriMain() {
         routeRequest,
         jsonResponse,
     });
-    const downloadBridge = createDownloadBridge({
+    // Web already owns link/image downloads. Native WebViews need host delivery;
+    // intercepting browser delivery would catch its own anchor and recurse.
+    const downloadBridge = isWebHost() ? null : createDownloadBridge({
         deliverBlob,
         deliverRemoteFile,
         notifyDownloadResult: showExportSuccessToast,
@@ -343,12 +345,12 @@ export function bootstrapTauriMain() {
 
     interceptors.patchFetch();
     interceptors.patchJQueryAjax();
-    downloadBridge.patchWindow();
+    downloadBridge?.patchWindow();
     const runtimeCompat = (targetWindow) => {
         installDialogPolyfillCoverage(targetWindow);
         if (isMobile) {
             installMobileRuntimeCompat(targetWindow);
-        } else {
+        } else if (isDesktopHost()) {
             installDesktopFullscreenShortcut(targetWindow);
         }
     };
@@ -377,7 +379,7 @@ export function bootstrapTauriMain() {
     }
 
     runAfterTauriReady(() => setFrontendLogBackendForwardingEnabled(true));
-    runAfterTauriReady(() => {
+    if (!isWebHost()) runAfterTauriReady(() => {
         installWindowBackdrop(context);
         void installWindowLayout(context).catch(error => console.error('[TauriTavern] Window layout:', error));
     });

@@ -1,5 +1,7 @@
+import { getCsrfToken } from '../../../tauri-bridge.js';
+
 export function registerSystemRoutes(router, context, { jsonResponse }) {
-    router.all('/csrf-token', async () => jsonResponse({ token: 'tauri-dummy-token' }));
+    router.all('/csrf-token', async () => jsonResponse({ token: await getCsrfToken() }));
 
     router.all('/version', async () => {
         const versionInfo = await context.safeInvoke('get_client_version');

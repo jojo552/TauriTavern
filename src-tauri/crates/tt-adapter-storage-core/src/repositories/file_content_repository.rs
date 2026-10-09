@@ -1,13 +1,12 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
+use std::sync::Arc;
 use tokio::fs;
 
-use crate::infrastructure::assets::{
-    copy_resource_to_file, list_default_content_files_under, read_resource_json,
-};
+use crate::bundled_resources::{read_resource_bytes, read_resource_json};
 use tt_domain::errors::DomainError;
+use tt_ports::bundled_resources::BundledResources;
 use tt_ports::repositories::content_repository::{
     ContentItem, ContentRepository, ContentScope, ContentType,
 };
@@ -22,7 +21,7 @@ struct ContentIndexItem {
 
 /// File Content Repository implementation
 pub struct FileContentRepository {
-    app_handle: AppHandle,
+    bundled_resources: Arc<dyn BundledResources>,
     data_root: PathBuf,
     user_content_dir: PathBuf,
 }
@@ -32,13 +31,17 @@ impl FileContentRepository {
     ///
     /// # Arguments
     ///
-    /// * `app_handle` - Tauri app handle for resolving resource paths
+    /// * `bundled_resources` - Host-supplied read-only resource access
     /// * `data_root` - Path to the global data root
     /// * `user_content_dir` - Path to the user content directory (e.g., data/default-user)
     ///   This should be the complete path to the user directory, not just the parent directory.
-    pub fn new(app_handle: AppHandle, data_root: PathBuf, user_content_dir: PathBuf) -> Self {
+    pub fn new(
+        bundled_resources: Arc<dyn BundledResources>,
+        data_root: PathBuf,
+        user_content_dir: PathBuf,
+    ) -> Self {
         Self {
-            app_handle,
+            bundled_resources,
             data_root,
             user_content_dir,
         }
@@ -104,12 +107,20 @@ impl FileContentRepository {
         Path::new(path).extension().is_none()
     }
 
-    fn expand_resource_entries(&self, filename: &str) -> Result<Vec<String>, DomainError> {
+    async fn expand_resource_entries(&self, filename: &str) -> Result<Vec<String>, DomainError> {
         if !Self::is_directory_entry(filename) {
             return Ok(vec![filename.to_string()]);
         }
 
-        let entries = list_default_content_files_under(filename);
+        let resources = self.bundled_resources.clone();
+        let prefix = filename.to_string();
+        let entries = tokio::task::spawn_blocking(move || {
+            resources.list_default_content_files_under(&prefix)
+        })
+        .await
+        .map_err(|error| {
+            DomainError::InternalError(format!("Default content list task failed: {}", error))
+        })??;
         if entries.is_empty() {
             return Err(DomainError::NotFound(format!(
                 "Resource directory is empty or missing: {}",
@@ -193,6 +204,35 @@ impl FileContentRepository {
         })
     }
 
+    async fn copy_resource_to_file(
+        &self,
+        resource_relative_path: &str,
+        destination: &Path,
+    ) -> Result<(), DomainError> {
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).await.map_err(|error| {
+                tracing::error!(
+                    "Failed to create destination directory {:?}: {}",
+                    parent,
+                    error
+                );
+                DomainError::InternalError(format!("Failed to create directory: {}", error))
+            })?;
+        }
+
+        let bytes =
+            read_resource_bytes(self.bundled_resources.clone(), resource_relative_path).await?;
+        fs::write(destination, bytes).await.map_err(|error| {
+            tracing::error!(
+                "Failed to write copied resource {:?} to {:?}: {}",
+                resource_relative_path,
+                destination,
+                error
+            );
+            DomainError::InternalError(format!("Failed to write resource file: {}", error))
+        })
+    }
+
     async fn seed_content_scope(
         &self,
         scope: ContentScope,
@@ -227,7 +267,7 @@ impl FileContentRepository {
                 DomainError::InternalError(format!("Failed to create target directory: {}", error))
             })?;
 
-            let resource_entries = self.expand_resource_entries(&item.filename)?;
+            let resource_entries = self.expand_resource_entries(&item.filename).await?;
 
             for resource_entry in resource_entries {
                 let resource_path = format!("default/content/{}", resource_entry);
@@ -239,7 +279,8 @@ impl FileContentRepository {
                 }
 
                 tracing::debug!("Copying {} to {:?}", resource_path, dest_path);
-                copy_resource_to_file(&self.app_handle, &resource_path, &dest_path).await?;
+                self.copy_resource_to_file(&resource_path, &dest_path)
+                    .await?;
             }
 
             content_log.push(item.filename.clone());
@@ -294,7 +335,8 @@ impl ContentRepository for FileContentRepository {
 
     async fn get_content_index(&self) -> Result<Vec<ContentItem>, DomainError> {
         let index_items: Vec<ContentIndexItem> =
-            read_resource_json(&self.app_handle, "default/content/index.json")?;
+            read_resource_json(self.bundled_resources.clone(), "default/content/index.json")
+                .await?;
 
         // Convert to domain model
         let mut content_items = Vec::with_capacity(index_items.len());

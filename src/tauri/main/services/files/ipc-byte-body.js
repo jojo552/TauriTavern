@@ -12,6 +12,7 @@ export function encodeIpcByteBody(bytes) {
         case 'linux':
         case 'ios':
         case 'ohos':
+        case 'browser':
             return { body: bytes, headers: {} };
         default:
             throw new Error(`Unsupported byte transport platform: ${hostPlatform()}`);

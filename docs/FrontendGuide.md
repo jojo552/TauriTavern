@@ -1,15 +1,15 @@
 # TauriTavern 前端指南
 
-本文档描述 TauriTavern 当前前端（基于 SillyTavern 1.19.0）在 Tauri 环境下的集成架构与开发方式。
+本文档描述 TauriTavern 当前前端（基于 SillyTavern 1.19.0）在原生 Tauri 与 Rust HTTP 浏览器宿主下的集成架构与开发方式。两类宿主复用前端路由、扩展运行时与共享应用服务，不维护第二套业务后端。
 
-宿主层对外契约清单见：`docs/FrontendHostContract.md`（重构时优先保障其不回归）。
+宿主层对外契约清单见：[FrontendHostContract](FrontendHostContract.md)（重构时优先保障其不回归）。浏览器 transport、文件传输与当前能力边界见 [BrowserHost](CurrentState/BrowserHost.md)。
 
 共同控件与无障碍约定见 [FrontendAccessibility](FrontendAccessibility.md)。
 
 ## 1. 目标与原则
 
 - **最小侵入**：尽量保持上游 SillyTavern 前端行为不变。
-- **模块化**：将 Tauri 注入逻辑拆分为独立模块，避免单文件膨胀。
+- **模块化**：将宿主注入与 transport 逻辑拆分为独立模块，避免单文件膨胀。
 - **低耦合**：路由注册、请求拦截、业务上下文分离。
 - **入口收敛**：统一走 `init.js -> tauri-main.js -> tauri/main/*`，减少重复入口。
 
@@ -25,21 +25,21 @@
    - 注册前端路由（`router + routes/*`）
    - 安装请求拦截器（`fetch` 与 `jQuery.ajax`）
    - 安装平台 ABI：`window.__TAURITAVERN__`（小而稳定的宿主对外接口）
-   - 安装同源窗口下载桥（所有宿主的浏览器式导出 → 原生交付）
+   - 原生宿主安装同源窗口下载桥，暂存后交付；浏览器不安装原生下载拦截，交给浏览器下载，不确认落盘
    - 安装 Tauri mobile 兼容层（runtime polyfills，仅移动端）
    - 为宿主接管的路由响应注入追踪 header：`x-tauritavern-trace-id`
    - 初始化 bridge 与目录信息
-   - Tauri 就绪后安装窗口快照与窗口背景发布（仅移动端）
+   - 原生宿主就绪后安装窗口背景发布与移动端窗口快照；浏览器仍安装基于 DOM 视口的 `api.layout`
 
 ### 2.1 宿主身份
 
-宿主身份 `{ platform, kind }` 由 Rust 按编译目标生成（契约见 `docs/FrontendHostContract.md` §2.2）。前端只通过 `src/scripts/util/host-identity.js` 读取：`hostPlatform()` 返回平台，`isMobileHost()` / `isDesktopHost()` 返回宿主类别。测试用 `tests/helpers/host-identity.mjs` 安装身份。
+宿主身份 `{ platform, kind }` 在页面脚本运行前写入并冻结（契约见 [FrontendHostContract §2.2](FrontendHostContract.md#22-就绪信号publicproject)）：原生 Tauri 由 Rust 编译目标生成；HTTP 宿主明确注入 `{ platform: 'browser', kind: 'web' }`，不伪装成 Tauri runtime，也不写入 `__TAURI_RUNNING__`。前端统一通过 [host-identity.js](../src/scripts/util/host-identity.js) 识别：`hostPlatform()` 返回平台，`isMobileHost()` / `isDesktopHost()` / `isWebHost()` 区分类别；bridge 重导出 `isWebHost()`。后者只匹配完整 `browser/web` 身份，非项目环境缺少身份时返回 `false`；其他身份读取器缺少身份时抛错。测试用 [host identity helper](../tests/helpers/host-identity.mjs) 安装身份。
 
 与平台有关的判断，先分清在问什么：
 
 | 问题 | 依据 | 例子 |
 | --- | --- | --- |
-| 宿主属于哪一类外壳 | `isMobileHost()` / `isDesktopHost()` | 移动端兼容层、F11 全屏、数据目录选择、软键盘相关的自动聚焦 |
+| 宿主属于哪一类外壳 | `isMobileHost()` / `isDesktopHost()` / `isWebHost()` | 移动端兼容层、F11 全屏、原生目录选择、HTTP transport |
 | 选用哪个平台的实现，或某个平台独有的问题 | `hostPlatform()` | Windows 托盘、Android WebView 的剪贴板与 IME |
 | 可选能力是否存在 | 插件、原生桥或 DOM API 本身 | 扫码插件、Android 原生桥 |
 | 屏幕与交互形态 | 上游 Bowser `isMobile()`、CSS 媒体查询 | select2、MovingUI、`{{isMobile}}` |
@@ -57,7 +57,10 @@
 ```text
 src/
 ├── tauri-bridge.js            # 低层 bridge：invoke/listen/convertFileSrc
-├── tauri-main.js              # 新入口：只做 bootstrap
+├── tauri-main.js              # 共享入口：只做 bootstrap
+├── web/
+│   ├── transport.js           # 浏览器 session / HTTP invoke / SSE / Channel
+│   └── file-transfer.js       # DOM 文件选择与浏览器下载 handoff
 ├── tauri/
 │   └── main/
 │       ├── bootstrap.js       # 组合根（composition root）
@@ -116,9 +119,9 @@ src/
 
 ### 4.4 `download-bridge.js`
 
-- 处理所有宿主同源窗口中的浏览器式下载（如 `blob:` / `data:` / 同源 URL + `a[download]`）。
+- 仅在原生 Tauri 宿主安装，处理同源窗口中的浏览器式下载（如 `blob:` / `data:` / 同源 URL + `a[download]`）；浏览器宿主保留浏览器原生下载与保存图片行为。
 - Android 上为同源窗口中的 `<img>` 补上 `contextmenu` 默认行为（保存图片）：用户确认后，图片进入同一条导出链路。
-- 页面可读的内容交给 `deliverBlob()`；远程图片交给 `deliverRemoteFile()`，由宿主下载。两者都先暂存再交付，见[文件传输](CurrentState/FileTransfer.md)。
+- 页面可读的内容交给 `deliverBlob()`；远程图片交给 `deliverRemoteFile()`。原生宿主先暂存再交付，见[文件传输](CurrentState/FileTransfer.md)；浏览器宿主使用 Blob 或同源下载 URL，返回 `{ status: 'handed-off' }`，不表示已保存到磁盘。浏览器的远程导出只接受同源 URL，跨域内容需另行由宿主生成下载产物，见 [BrowserHost](CurrentState/BrowserHost.md)。
 - 不参与 API 路由判断，避免与请求拦截职责混合。
 
 ### 4.5 `router.js` + `routes/*`
@@ -136,7 +139,8 @@ src/
 
 补充：
 
-- `/csrf-token` 在 `system-routes.js` 中返回固定 token，用于通过前端初始化流程中的 CSRF 依赖检查。
+- `/csrf-token` 在共享 [system routes](../src/tauri/main/routes/system-routes.js) 中调用 `getCsrfToken()`：原生 Tauri 返回兼容 token；浏览器返回真实页面 session 的 CSRF token，HTTP invoke 必须携带并由服务端校验。
+- [bridge](../src/tauri-bridge.js) 按显式宿主身份选择原生 invoke/listen/Channel 或 [web transport](../src/web/transport.js) 的 HTTP/SSE 实现；路由层与扩展运行时不据此分叉业务逻辑。
 - 所有宿主接管的路由响应都会附带 `x-tauritavern-trace-id`，用于将 DevTools Network 与 console/perf-hud 关联定位问题（header 名也可从 `window.__TAURITAVERN__?.traceHeader` 获取）。
 
 ## 6. 路由分域说明
@@ -291,7 +295,7 @@ TauriTavern 自有的状态型 UI 作为 SillyTavern first-party extension 挂�
   - `Object.hasOwn`
   - `navigator.clipboard.writeText`（仅 Android；保留 Clipboard 对象上的其他方法）
 
-该策略用于修复移动端第三方插件在初始化阶段出现的 `TypeError: *.at is not a function`，以及 Android WebView 拒绝 Web Clipboard 写入的问题。TauriTavern 第一方代码在所有平台直接使用 `src/tauri-bridge.js` 的原生写入器；宿主只授予 `clipboard-manager:allow-write-text`，不授予剪贴板读取能力，也不需要申请操作系统运行时权限。
+该策略用于修复移动端第三方插件在初始化阶段出现的 `TypeError: *.at is not a function`，以及 Android WebView 拒绝 Web Clipboard 写入的问题。TauriTavern 第一方代码统一使用 [bridge](../src/tauri-bridge.js) 的 `writeClipboardText()`：原生宿主只授予 `clipboard-manager:allow-write-text`，不授予剪贴板读取能力，也不需要申请操作系统运行时权限；浏览器使用 DOM Clipboard API，受安全上下文、权限与用户激活约束，失败向调用方传播。
 
 #### 7.7.2 CSS `@layer` 降级（Android 旧 WebView）
 
@@ -308,6 +312,8 @@ TauriTavern 自有的状态型 UI 作为 SillyTavern first-party extension 挂�
 #### 7.7.3 原生内容视口与窗口背景
 
 原生宿主拥有主 WebView 的矩形，系统栏、刘海和停靠键盘在原生层消费一次，网页按普通视口排版。前端只做两件事：`util/window-layout.js` 接收窗口快照并设置 `#bg1` 的窗口矩形；`window-backdrop.js` 的 `applyWindowBackdrop()` 是第一方背景的唯一写入点，新增背景来源接入它。只有高度变化的 resize 不触发与宽度相关的工作。
+
+浏览器宿主不安装原生窗口快照或背景发布，但仍提供 `api.layout.snapshot()/subscribe()`：读取 `visualViewport`，缺少时使用 `innerWidth/innerHeight`，按浏览器实际内容视口布局。这与原生窗口能力是否存在是两回事。
 
 细节见 [CurrentState/MobileStyleAdaptation.md](CurrentState/MobileStyleAdaptation.md)，扩展可见的契约见 [API/Layout.md](API/Layout.md)。
 
@@ -361,7 +367,7 @@ TauriTavern 自有的状态型 UI 作为 SillyTavern first-party extension 挂�
 
 ## 9. 如何新增一个 Tauri 注入接口
 
-1. 在 Rust 后端新增/确认命令（`src-tauri/crates/tauritavern/src/presentation/commands/*`）。
+1. 在 Rust 后端新增/确认命令（`src-tauri/crates/tauritavern/src/presentation/commands/*`）；跨宿主业务进入共享 application service，并在 HTTP [command dispatch](../src-tauri/crates/tt-server/src/commands.rs) 接入，不复制业务实现。原生专属能力明确保留宿主边界。
 2. 若宿主层会调用该命令，将命令名加入 `src/tauri/main/kernel/invokes/tauri-commands.js`（`TauriInvokeCommand`，避免字符串拼写漂移）。
 3. 若该命令为高频/可合并写入的调用，按需在 `src/tauri/main/kernel/invokes/invoke-policies.js` 增加/调整策略（dedupe / write-behind）。
 4. 在 `src/tauri/main/routes/` 对应业务域中新增路由：路由层禁止直接引用 `window`，需要浏览器能力时下沉到 `adapters/` 或 `services/`。

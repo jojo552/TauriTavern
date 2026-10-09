@@ -1,18 +1,21 @@
 use std::collections::BTreeMap;
 
-use tt_application::dto::agent_dto::{
-    AgentRunLiveFieldDto, AgentRunLiveResponseDto, AgentRunLiveToolCallDto, AgentRunLiveUpdateDto,
-};
-use tt_application::services::agent_runtime_service::{
+use tt_domain::text_metrics::TextMetrics;
+
+use super::{
     AgentRunLiveCall, AgentRunLiveCallKey, AgentRunLiveProjection, AgentRunLiveResponse,
     ModelAttemptGeneration, ToolCallProjection,
 };
-use tt_domain::text_metrics::TextMetrics;
+use crate::dto::agent_dto::{
+    AgentRunLiveFieldDto, AgentRunLiveResponseDto, AgentRunLiveToolCallDto, AgentRunLiveUpdateDto,
+};
+use crate::errors::ApplicationError;
 
-use crate::presentation::errors::CommandError;
-
+/// Turns successive live projections of one run into the incremental updates a page renders.
+///
+/// Each subscriber owns one presenter: it remembers what that subscriber has already seen.
 #[derive(Default)]
-pub(super) struct AgentRunLivePresenter {
+pub struct AgentRunLivePresenter {
     calls: BTreeMap<AgentRunLiveCallKey, PresentedCall>,
     responses: BTreeMap<String, PresentedResponse>,
 }
@@ -53,10 +56,7 @@ enum PresentedFields {
 }
 
 impl AgentRunLivePresenter {
-    pub(super) fn snapshot(
-        &mut self,
-        projection: &AgentRunLiveProjection,
-    ) -> AgentRunLiveUpdateDto {
+    pub fn snapshot(&mut self, projection: &AgentRunLiveProjection) -> AgentRunLiveUpdateDto {
         self.calls = projection
             .calls
             .iter()
@@ -81,10 +81,10 @@ impl AgentRunLivePresenter {
         }
     }
 
-    pub(super) fn updates(
+    pub fn updates(
         &mut self,
         projection: &AgentRunLiveProjection,
-    ) -> Result<Vec<AgentRunLiveUpdateDto>, CommandError> {
+    ) -> Result<Vec<AgentRunLiveUpdateDto>, ApplicationError> {
         let mut updates = self
             .calls
             .keys()
@@ -131,7 +131,7 @@ impl AgentRunLivePresenter {
                         .zip(response.reasoning.get(previous.reasoning_bytes..))
                         .zip(response.tool_ids.get(previous.tool_count..));
                     let Some(((text, reasoning), tool_ids)) = suffixes else {
-                        return Err(CommandError::InternalServerError(format!(
+                        return Err(ApplicationError::InternalError(format!(
                             "agent.live_projection_cursor_invalid: response shrank for invocation `{id}`"
                         )));
                     };
@@ -228,7 +228,7 @@ fn append_projection_updates(
     key: &AgentRunLiveCallKey,
     previous: &PresentedFields,
     current: &ToolCallProjection,
-) -> Result<(), CommandError> {
+) -> Result<(), ApplicationError> {
     match (previous, current) {
         (
             PresentedFields::WriteFile {
@@ -274,7 +274,7 @@ fn append_projection_updates(
                 new_string,
             )
         }
-        _ => Err(CommandError::InternalServerError(format!(
+        _ => Err(ApplicationError::InternalError(format!(
             "agent.live_projection_kind_changed: projection kind changed within one generation for invocation `{}` tool index {}",
             key.invocation_id, key.tool_call_index
         ))),
@@ -287,9 +287,9 @@ fn append_field(
     field: AgentRunLiveFieldDto,
     previous_bytes: usize,
     current: &str,
-) -> Result<(), CommandError> {
+) -> Result<(), ApplicationError> {
     let Some(text) = current.get(previous_bytes..) else {
-        return Err(CommandError::InternalServerError(format!(
+        return Err(ApplicationError::InternalError(format!(
             "agent.live_projection_cursor_invalid: {field:?} shrank for invocation `{}` tool index {}",
             key.invocation_id, key.tool_call_index
         )));

@@ -1,39 +1,37 @@
-use async_trait::async_trait;
 use chrono::Utc;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
-use tauri::AppHandle;
-use tauri::Manager;
 use uuid::Uuid;
 
-use crate::infrastructure::paths::RuntimePaths;
-use tt_adapter_storage_core::file_system::DataDirectory;
 use tt_domain::errors::DomainError;
 use tt_ports::data_archive::{
-    DataArchiveFileGateway, DataRootInitializer, ExportArchiveExecutionRequest,
-    ImportArchiveExecutionRequest, UserBackupArchiveExecutionRequest, UserBackupArchiveTarget,
+    DataArchiveFileGateway, ExportArchiveExecutionRequest, ImportArchiveExecutionRequest,
+    UserBackupArchiveExecutionRequest, UserBackupArchiveTarget,
 };
 
 const EXPORT_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 
-pub(crate) struct TauriDataArchiveFileGateway {
-    app_handle: AppHandle,
+/// Stages archive jobs under host-owned import/export roots for one data root.
+pub struct FileDataArchiveGateway {
+    data_root: PathBuf,
+    imports_root: PathBuf,
+    exports_root: PathBuf,
 }
 
-impl TauriDataArchiveFileGateway {
-    pub(crate) fn new(app_handle: AppHandle) -> Self {
-        Self { app_handle }
+impl FileDataArchiveGateway {
+    pub fn new(data_root: PathBuf, imports_root: PathBuf, exports_root: PathBuf) -> Self {
+        Self {
+            data_root,
+            imports_root,
+            exports_root,
+        }
     }
 }
 
-impl DataArchiveFileGateway for TauriDataArchiveFileGateway {
+impl DataArchiveFileGateway for FileDataArchiveGateway {
     fn prepare_incoming_import_archive_path(&self) -> Result<PathBuf, DomainError> {
-        let incoming_dir = self
-            .app_handle
-            .state::<RuntimePaths>()
-            .archive_imports_root
-            .join("incoming");
+        let incoming_dir = self.imports_root.join("incoming");
         fs::create_dir_all(&incoming_dir).map_err(|error| {
             DomainError::InternalError(format!(
                 "Failed to create import staging directory {}: {}",
@@ -61,9 +59,8 @@ impl DataArchiveFileGateway for TauriDataArchiveFileGateway {
             )));
         }
 
-        let runtime_paths = self.app_handle.state::<RuntimePaths>();
-        let imports_root = runtime_paths.archive_imports_root.clone();
-        fs::create_dir_all(&imports_root).map_err(|error| {
+        let imports_root = &self.imports_root;
+        fs::create_dir_all(imports_root).map_err(|error| {
             DomainError::InternalError(format!("Failed to create job root: {}", error))
         })?;
 
@@ -85,7 +82,7 @@ impl DataArchiveFileGateway for TauriDataArchiveFileGateway {
         };
 
         Ok(ImportArchiveExecutionRequest {
-            data_root: runtime_paths.data_root.clone(),
+            data_root: self.data_root.clone(),
             archive_path,
             workspace_root,
         })
@@ -96,16 +93,15 @@ impl DataArchiveFileGateway for TauriDataArchiveFileGateway {
         job_id: &str,
         protected_paths: &[PathBuf],
     ) -> Result<ExportArchiveExecutionRequest, DomainError> {
-        let runtime_paths = self.app_handle.state::<RuntimePaths>();
-        let export_root = runtime_paths.archive_exports_root.clone();
-        fs::create_dir_all(&export_root).map_err(|error| {
+        let export_root = &self.exports_root;
+        fs::create_dir_all(export_root).map_err(|error| {
             DomainError::InternalError(format!("Failed to create export directory: {}", error))
         })?;
-        cleanup_stale_exports(&export_root, protected_paths);
+        cleanup_stale_exports(export_root, protected_paths);
         let file_name = default_export_file_name();
 
         Ok(ExportArchiveExecutionRequest {
-            data_root: runtime_paths.data_root.clone(),
+            data_root: self.data_root.clone(),
             output_path: export_root.join(full_export_staging_file_name(job_id)),
             file_name,
         })
@@ -117,14 +113,13 @@ impl DataArchiveFileGateway for TauriDataArchiveFileGateway {
         include_secrets: bool,
         protected_paths: &[PathBuf],
     ) -> Result<UserBackupArchiveTarget, DomainError> {
-        let runtime_paths = self.app_handle.state::<RuntimePaths>();
-        let export_root = runtime_paths.archive_exports_root.clone();
-        fs::create_dir_all(&export_root).map_err(|error| {
+        let export_root = &self.exports_root;
+        fs::create_dir_all(export_root).map_err(|error| {
             DomainError::InternalError(format!("Failed to create export directory: {}", error))
         })?;
-        cleanup_stale_exports(&export_root, protected_paths);
+        cleanup_stale_exports(export_root, protected_paths);
 
-        let (handle, user_root) = resolve_user_backup_root(&runtime_paths.data_root, handle)?;
+        let (handle, user_root) = resolve_user_backup_root(&self.data_root, handle)?;
         let file_name = default_user_backup_file_name(&handle);
         let output_path = export_root.join(format!(
             ".user-backup-{}-{}",
@@ -161,17 +156,6 @@ impl DataArchiveFileGateway for TauriDataArchiveFileGateway {
                 ))
             }
         })
-    }
-}
-
-pub(crate) struct DataDirectoryDataRootInitializer;
-
-#[async_trait]
-impl DataRootInitializer for DataDirectoryDataRootInitializer {
-    async fn initialize_data_root(&self, data_root: &Path) -> Result<(), DomainError> {
-        DataDirectory::new(data_root.to_path_buf())
-            .initialize()
-            .await
     }
 }
 

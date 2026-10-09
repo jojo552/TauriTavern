@@ -111,7 +111,7 @@ function createWorld(api: TauriTavernSkillApi, profiles: TauriTavernAgentProfile
         },
         getSkillApi: () => ({ ...api, acquireImport: () => async () => { state.discards += 1; await api.discardPickedImport(); } }),
         confirmAction: () => Promise.resolve(true),
-        downloadExport: () => Promise.resolve({ delivered: true }),
+        downloadExport: () => Promise.resolve({ delivered: true }), notifyExportResult: () => undefined,
         syncInstallPortability: () => Promise.resolve(),
         syncMovePortability: () => Promise.resolve(),
         syncWritePortability: () => Promise.resolve(),

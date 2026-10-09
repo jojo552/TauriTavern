@@ -1,6 +1,7 @@
 // @ts-check
 
 import { encodeIpcByteBody } from './ipc-byte-body.js';
+import { invoke as hostInvoke } from '../../../../tauri-bridge.js';
 
 /**
  * @typedef {import('../../context/types.js').TauriInvokeCommand} TauriInvokeCommand
@@ -10,7 +11,7 @@ import { encodeIpcByteBody } from './ipc-byte-body.js';
 /** @param {{ safeInvoke?: InvokeFn | undefined; invoke?: InvokeFn | undefined }} [deps] */
 export function createFileStagingService({ safeInvoke, invoke } = {}) {
     function rawInvoke() {
-        const invokeApi = invoke ?? window.__TAURI__?.core?.invoke;
+        const invokeApi = invoke ?? hostInvoke;
         if (typeof invokeApi !== 'function') throw new Error('Tauri invoke API is unavailable');
         return invokeApi;
     }

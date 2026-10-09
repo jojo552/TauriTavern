@@ -9,6 +9,7 @@ import { createRunRetentionController } from './RunRetentionController';
 import {
     confirmAction,
     errorText,
+    notifyExportResult,
     reportAgentSystemError,
     requireAgentApi,
     requireHostApi,
@@ -152,7 +153,8 @@ export function openAgentSystemPanel(): void {
         subscribeModelTargetsChanged: subscribeModelTargetChanges,
         subscribeLlmConnectionsChanged,
         confirmAction,
-        downloadBlob: (blob, fileName) => deliverBlob(blob, fileName),
+        downloadBlob: deliverBlob,
+        notifyExportResult,
         notifyError: reportAgentSystemError,
         notifyWarning: (message) => window.toastr?.warning?.(message),
         notifySuccess: (message) => window.toastr?.success?.(message),

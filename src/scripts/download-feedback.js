@@ -7,6 +7,18 @@ export function getExportSuccessMessage() {
     return t`Export completed.`;
 }
 
+/**
+ * @typedef {{
+ *   success?: (message: string, title?: string, options?: object) => unknown,
+ *   info?: (message: string, title?: string, options?: object) => unknown,
+ * }} ExportFeedbackToastr
+ */
+
+/**
+ * Native delivery is confirmed; browser handoff is reported as started, never as saved.
+ * @param {import('./file-export.js').FileDeliveryResult | null | undefined} result
+ * @param {{ toastrInstance?: ExportFeedbackToastr | null, title?: string, timeOut?: number }} [options]
+ */
 export function showExportSuccessToast(
     result,
     {
@@ -15,6 +27,10 @@ export function showExportSuccessToast(
         timeOut = DEFAULT_EXPORT_SUCCESS_TIMEOUT,
     } = {},
 ) {
+    if (result?.status === 'handed-off') {
+        toastrInstance?.info?.(t`Download handed to the browser. Saving or cancellation cannot be confirmed.`, t`Download started`, { timeOut });
+        return;
+    }
     if (result?.delivered !== true) {
         return;
     }

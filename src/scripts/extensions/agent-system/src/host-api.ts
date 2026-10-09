@@ -1,3 +1,4 @@
+import type { FileDeliveryResult } from '../../../file-export.js';
 import { translateAgentSystem as tr } from './i18n';
 
 type SillyTavernPopupContext = {
@@ -50,6 +51,13 @@ export function loadCodeMirrorEditor() {
     // Keep the initialized host module shared with the unbundled frontend.
     const url = '/scripts/tauri/codemirror-editor.js';
     return import(url /* webpackIgnore: true */) as Promise<typeof import('../../../tauri/codemirror-editor.js')>;
+}
+
+export async function notifyExportResult(result: FileDeliveryResult): Promise<void> {
+    // Use the host's shared feedback without bundling the SillyTavern module graph.
+    const url = '/scripts/download-feedback.js';
+    const { showExportSuccessToast } = await import(url /* webpackIgnore: true */) as typeof import('../../../download-feedback.js');
+    showExportSuccessToast(result, { toastrInstance: window.toastr });
 }
 
 export function requireLlmConnectionsApi(): TauriTavernLlmConnectionsApi {

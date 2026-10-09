@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 
 import { deliverBlob } from '../../../../file-export.js';
 import { subscribeAgentProfilesChanged } from '../../../../tauritavern/agent/agent-profile-events.js';
-import { confirmAction, errorText, requireAgentApi, requireSillyTavernContext, requireSkillApi } from '../host-api';
+import { confirmAction, errorText, notifyExportResult, requireAgentApi, requireSillyTavernContext, requireSkillApi } from '../host-api';
 import { translateAgentSystem as tr, translateSkillInstallAction } from '../i18n';
 import { loadSettings, subscribeSettings } from '../settings-store';
 import { SkillManager } from './SkillManager';
@@ -59,6 +59,7 @@ function createDeps(): SkillManagerDeps {
         getSkillApi: requireSkillApi,
         confirmAction,
         downloadExport: (blob, fileName, fallbackName) => deliverBlob(blob, fileName || fallbackName),
+        notifyExportResult,
         syncInstallPortability: syncSkillInstallPortability,
         syncMovePortability: syncSkillMovePortability,
         syncWritePortability: syncSkillWritePortability,

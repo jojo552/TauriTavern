@@ -1,3 +1,4 @@
+import type { FileDeliveryResult } from '../../../../file-export.js';
 import type { AgentSystemMessageKey, AgentSystemTr } from '../i18n';
 
 export type SkillManagerTr = AgentSystemTr;
@@ -131,10 +132,6 @@ export type SkillManagerSnapshot = {
     supportsDirectoryImport: boolean;
 };
 
-export type SkillDownloadResult = {
-    delivered: boolean;
-};
-
 export type SkillManagerDeps = {
     loadSettings: () => Promise<{ editingProfileId?: string }>;
     subscribeSettings: (listener: (settings: { editingProfileId?: string }) => void) => () => void;
@@ -143,7 +140,8 @@ export type SkillManagerDeps = {
     getHostContext: () => SkillHostContext;
     getSkillApi: () => TauriTavernSkillApi;
     confirmAction: (message: string) => Promise<boolean>;
-    downloadExport: (blob: Blob, fileName: string, fallbackName: string) => Promise<SkillDownloadResult>;
+    downloadExport: (blob: Blob, fileName: string, fallbackName: string) => Promise<FileDeliveryResult>;
+    notifyExportResult: (result: FileDeliveryResult) => void | Promise<void>;
     syncInstallPortability: (result: TauriTavernSkillInstallResult) => Promise<void>;
     syncMovePortability: (
         request: Parameters<TauriTavernSkillApi['move']>[0],

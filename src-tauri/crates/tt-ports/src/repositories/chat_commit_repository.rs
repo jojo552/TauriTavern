@@ -64,6 +64,12 @@ pub trait ChatCommitRepository: Send + Sync {
         target: ChatCommitTarget,
     ) -> Result<Box<dyn ByteReader>, DomainError>;
 
+    /// The stored JSONL bytes of one opened file, unchanged. Readers parse and validate records.
+    async fn open_payload_jsonl(
+        &self,
+        target: ChatCommitTarget,
+    ) -> Result<Box<dyn ByteReader>, DomainError>;
+
     async fn open_swipe_source(
         &self,
         target: ChatCommitTarget,

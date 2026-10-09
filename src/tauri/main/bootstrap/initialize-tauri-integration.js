@@ -42,5 +42,5 @@ export async function initializeTauriIntegration(
     // Re-apply runtime patches in case third-party code recreated fetch/jQuery or download bindings after bootstrap.
     interceptors.patchFetch();
     interceptors.patchJQueryAjax();
-    downloadBridge.patchWindow();
+    downloadBridge?.patchWindow();
 }

@@ -1,5 +1,3 @@
-use serde::de::DeserializeOwned;
-use std::path::Path;
 use std::sync::OnceLock;
 use tauri::AppHandle;
 #[cfg(not(embedded_resources))]
@@ -8,11 +6,13 @@ use tauri::Manager;
 use tauri::path::BaseDirectory;
 #[cfg(not(embedded_resources))]
 use tauri_plugin_fs::FsExt;
-use tokio::fs;
-
+use tt_adapter_storage_core::bundled_resources::{
+    decode_resource_text, normalize_resource_relative_path,
+};
 use tt_domain::errors::DomainError;
 
-static DEFAULT_CONTENT_MANIFEST: OnceLock<Vec<String>> = OnceLock::new();
+// The generated manifest is immutable; keep a parse failure as text so every caller sees it.
+static DEFAULT_CONTENT_MANIFEST: OnceLock<Result<Vec<String>, String>> = OnceLock::new();
 
 #[cfg(any(embedded_resources, feature = "portable"))]
 mod embedded_resources {
@@ -24,13 +24,7 @@ pub fn read_resource_text(
     relative_path: &str,
 ) -> Result<String, DomainError> {
     let bytes = read_resource_bytes(app_handle, relative_path)?;
-    String::from_utf8(bytes).map_err(|e| {
-        tracing::error!("Failed to decode resource text {:?}: {}", relative_path, e);
-        DomainError::InvalidData(format!(
-            "Resource '{}' is not valid UTF-8: {}",
-            relative_path, e
-        ))
-    })
+    decode_resource_text(relative_path, bytes)
 }
 
 pub fn read_resource_bytes(
@@ -85,42 +79,7 @@ pub fn read_resource_bytes(
     }
 }
 
-pub fn read_resource_json<T: DeserializeOwned>(
-    app_handle: &AppHandle,
-    relative_path: &str,
-) -> Result<T, DomainError> {
-    let text = read_resource_text(app_handle, relative_path)?;
-    serde_json::from_str(&text).map_err(|e| {
-        tracing::error!("Failed to parse JSON resource {:?}: {}", relative_path, e);
-        DomainError::InvalidData(format!("Invalid JSON resource '{}': {}", relative_path, e))
-    })
-}
-
-pub async fn copy_resource_to_file(
-    app_handle: &AppHandle,
-    resource_relative_path: &str,
-    destination: &Path,
-) -> Result<(), DomainError> {
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).await.map_err(|e| {
-            tracing::error!("Failed to create destination directory {:?}: {}", parent, e);
-            DomainError::InternalError(format!("Failed to create directory: {}", e))
-        })?;
-    }
-
-    let bytes = read_resource_bytes(app_handle, resource_relative_path)?;
-    fs::write(destination, bytes).await.map_err(|e| {
-        tracing::error!(
-            "Failed to write copied resource {:?} to {:?}: {}",
-            resource_relative_path,
-            destination,
-            e
-        );
-        DomainError::InternalError(format!("Failed to write resource file: {}", e))
-    })
-}
-
-pub fn list_default_content_files_under(prefix: &str) -> Vec<String> {
+pub fn list_default_content_files_under(prefix: &str) -> Result<Vec<String>, DomainError> {
     let normalized_prefix = prefix.trim_matches('/').replace('\\', "/");
     let query = if normalized_prefix.is_empty() {
         String::new()
@@ -128,24 +87,27 @@ pub fn list_default_content_files_under(prefix: &str) -> Vec<String> {
         format!("{}/", normalized_prefix)
     };
 
-    let files = DEFAULT_CONTENT_MANIFEST.get_or_init(load_default_content_manifest);
+    let files = DEFAULT_CONTENT_MANIFEST
+        .get_or_init(load_default_content_manifest)
+        .as_ref()
+        .map_err(|message| DomainError::InvalidData(message.clone()))?;
     if query.is_empty() {
-        return files.to_vec();
+        return Ok(files.to_vec());
     }
 
-    files
+    Ok(files
         .iter()
         .filter(|path| path.starts_with(&query))
         .cloned()
-        .collect()
+        .collect())
 }
 
-fn load_default_content_manifest() -> Vec<String> {
+fn load_default_content_manifest() -> Result<Vec<String>, String> {
     let raw = include_str!(concat!(env!("OUT_DIR"), "/default_content_manifest.json"));
     match serde_json::from_str::<Vec<String>>(raw) {
         Ok(mut entries) => {
             entries.sort();
-            entries
+            Ok(entries)
         }
         Err(error) => {
             tracing::error!(
@@ -153,7 +115,10 @@ fn load_default_content_manifest() -> Vec<String> {
                 "Failed to load generated default content manifest: {}",
                 error
             );
-            Vec::new()
+            Err(format!(
+                "Invalid generated default content manifest: {}",
+                error
+            ))
         }
     }
 }
@@ -170,20 +135,6 @@ fn resolve_resource_path(
             tracing::error!("Failed to resolve resource path {:?}: {}", relative_path, e);
             DomainError::InternalError(format!("Failed to resolve resource path: {}", e))
         })
-}
-
-fn normalize_resource_relative_path(relative_path: &str) -> Result<String, DomainError> {
-    let normalized = relative_path.trim().replace('\\', "/");
-    let normalized = normalized.trim_start_matches('/').to_string();
-
-    if normalized.is_empty() || normalized.contains("..") {
-        return Err(DomainError::InvalidData(format!(
-            "Invalid resource path: {}",
-            relative_path
-        )));
-    }
-
-    Ok(normalized)
 }
 
 #[cfg(not(embedded_resources))]

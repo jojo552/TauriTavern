@@ -251,3 +251,35 @@ async fn json_array_reads_preserve_raw_records_and_reject_truncated_sources() {
     assert!(read_chat_stream_bytes(reader).await.is_err());
     cleanup_repository(repository, root).await;
 }
+
+#[tokio::test]
+async fn jsonl_reads_return_the_opened_file_bytes_across_atomic_replacement() {
+    let (repository, root) = setup_repository().await;
+    let source = "\u{feff}{\"chat_metadata\":{}}\r\n{\"mes\":\"旧\"}\n";
+    let target = character_target("alice", "raw");
+    commit_payload_bytes(&repository, target.clone(), source.as_bytes(), true)
+        .await
+        .unwrap();
+
+    let reader = repository.open_payload_jsonl(target.clone()).await.unwrap();
+    commit_payload_bytes(
+        &repository,
+        target.clone(),
+        b"{\"chat_metadata\":{}}\n{\"mes\":\"new\"}",
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        read_chat_stream_bytes(reader).await.unwrap(),
+        source.as_bytes()
+    );
+
+    assert!(matches!(
+        repository
+            .open_payload_jsonl(character_target("alice", "missing"))
+            .await,
+        Err(DomainError::NotFound(_))
+    ));
+    cleanup_repository(repository, root).await;
+}

@@ -1,6 +1,10 @@
 // Application bootstrap.
 
-window.__TAURI_RUNNING__ = true;
+import { isWebHost } from './scripts/util/host-identity.js';
+
+const IS_WEB_HOST = isWebHost();
+// Native hosts can inject bridge internals after this module. Web never claims that runtime.
+if (!IS_WEB_HOST) window.__TAURI_RUNNING__ = true;
 
 // In some WebKit builds, `location.href` may omit the trailing slash for origin-only
 // URLs (e.g. `tauri://localhost`). jQuery UI Tabs uses `anchor.href` vs
@@ -268,7 +272,7 @@ async function initializeApplication() {
         if (PERF_ENABLED) {
             safePerfMark('tt:init:dev-sw:start');
         }
-        await setupDevThirdPartyExtensionServiceWorker();
+        if (!IS_WEB_HOST) await setupDevThirdPartyExtensionServiceWorker();
         if (PERF_ENABLED) {
             safePerfMark('tt:init:dev-sw:end');
             safePerfMeasure('tt:init:dev-sw', 'tt:init:dev-sw:start', 'tt:init:dev-sw:end');
@@ -289,7 +293,9 @@ async function initializeApplication() {
         if (PERF_ENABLED) {
             safePerfMark('tt:init:import:tauri-main:start');
         }
-        await importWithRetry('./tauri-main.js');
+        if (IS_WEB_HOST) await import('./tauri-main.js');
+        else await importWithRetry('./tauri-main.js');
+        if (IS_WEB_HOST) await window.__TAURITAVERN_MAIN_READY__;
         if (PERF_ENABLED) {
             safePerfMark('tt:init:import:tauri-main:end');
             safePerfMeasure('tt:init:import:tauri-main', 'tt:init:import:tauri-main:start', 'tt:init:import:tauri-main:end');

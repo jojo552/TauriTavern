@@ -6,7 +6,6 @@ use serde_json::Value;
 use tauri::{State, ipc::Channel};
 
 use crate::app::AppState;
-use crate::presentation::commands::agent_live_projection::AgentRunLivePresenter;
 use crate::presentation::commands::helpers::{log_command, map_command_error};
 use crate::presentation::errors::CommandError;
 use tt_application::dto::agent_dto::{
@@ -29,6 +28,7 @@ use tt_application::dto::agent_dto::{
     AgentSubscribeRunLiveProjectionDto, AgentTaskDetailDto, AgentWorkspaceFileDto,
 };
 use tt_application::errors::ApplicationError;
+use tt_application::services::agent_runtime_service::AgentRunLivePresenter;
 use tt_application::services::agent_workspace_lifecycle_service::AgentChatWorkspaceTarget;
 use tt_domain::models::agent::AgentChatRef;
 use tt_domain::models::agent::profile_diagnostic::AgentProfileHealth;

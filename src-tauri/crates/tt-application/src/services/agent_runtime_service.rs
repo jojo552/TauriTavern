@@ -43,6 +43,7 @@ mod input_context;
 mod invocation;
 mod journal;
 mod lifecycle;
+mod live_presenter;
 mod loop_runner;
 mod markdown;
 mod model_response_store;
@@ -65,6 +66,7 @@ mod tool_snapshot;
 #[cfg(test)]
 mod tests;
 
+pub use live_presenter::AgentRunLivePresenter;
 pub use model_stream_projection::{
     AgentRunLiveCall, AgentRunLiveCallKey, AgentRunLiveProjection, AgentRunLiveResponse,
     ModelAttemptGeneration, ToolCallProjection,

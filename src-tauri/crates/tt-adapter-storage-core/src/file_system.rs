@@ -1,9 +1,11 @@
+use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs::{self as tokio_fs, create_dir_all};
 use tokio::io as tokio_io;
 use tt_domain::errors::DomainError;
+use tt_ports::data_archive::DataRootInitializer;
 use uuid::Uuid;
 
 /// Represents the application data directory structure
@@ -190,6 +192,18 @@ impl DataDirectory {
     /// Get the chat backups directory
     pub fn backups(&self) -> &Path {
         &self.backups
+    }
+}
+
+/// Creates the data-root layout for a data root chosen at call time (archive import target).
+pub struct DataDirectoryDataRootInitializer;
+
+#[async_trait]
+impl DataRootInitializer for DataDirectoryDataRootInitializer {
+    async fn initialize_data_root(&self, data_root: &Path) -> Result<(), DomainError> {
+        DataDirectory::new(data_root.to_path_buf())
+            .initialize()
+            .await
     }
 }
 

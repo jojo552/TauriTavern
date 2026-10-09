@@ -1,7 +1,7 @@
 // @ts-check
 
 import { eventSource, event_types } from '../../../../scripts/events.js';
-import { getTauriTavernSettings } from '../../../../tauri-bridge.js';
+import { getTauriTavernSettings, isTauri } from '../../../../tauri-bridge.js';
 import {
     applySillyTavernGlobalBackground,
     applySillyTavernTheme,
@@ -159,15 +159,16 @@ export function installDynamicTheme() {
                 throw new Error('Dynamic appearance: matchMedia change listener is unavailable');
             }
 
-            const listen = window.__TAURI__?.event?.listen;
-            if (typeof listen !== 'function') {
-                throw new Error('Dynamic appearance: Tauri theme listener is unavailable');
+            if (isTauri()) {
+                const listen = window.__TAURI__?.event?.listen;
+                if (typeof listen !== 'function') {
+                    throw new Error('Dynamic appearance: Tauri theme listener is unavailable');
+                }
+                void listen('tauri://theme-changed', (/** @type {any} */ event) => {
+                    const nextTheme = event?.payload === 'dark' ? 'dark' : 'light';
+                    updateSystemThemeAndSync(nextTheme, 'tauri://theme-changed');
+                });
             }
-
-            void listen('tauri://theme-changed', (/** @type {any} */ event) => {
-                const nextTheme = event?.payload === 'dark' ? 'dark' : 'light';
-                updateSystemThemeAndSync(nextTheme, 'tauri://theme-changed');
-            });
 
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState !== 'visible') {

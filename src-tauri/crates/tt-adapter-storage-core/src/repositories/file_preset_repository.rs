@@ -2,20 +2,20 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::AppHandle;
 
-use crate::infrastructure::assets::read_resource_json;
-use tt_adapter_storage_core::file_system::{delete_file, read_json_file, write_json_file};
-use tt_adapter_storage_core::preset_file_naming::{PresetFilePaths, load_named_preset_files};
+use crate::bundled_resources::read_resource_json;
+use crate::file_system::{delete_file, read_json_file, write_json_file};
+use crate::preset_file_naming::{PresetFilePaths, load_named_preset_files};
 use tt_domain::errors::DomainError;
 use tt_domain::models::preset::{DefaultPreset, Preset, PresetType};
+use tt_ports::bundled_resources::BundledResources;
 use tt_ports::repositories::content_repository::ContentRepository;
 use tt_ports::repositories::preset_repository::PresetRepository;
 
 /// File-based implementation of the PresetRepository
 pub struct FilePresetRepository {
-    /// Tauri app handle for path resolution
-    app_handle: AppHandle,
+    /// Host-supplied read-only bundled resources
+    bundled_resources: Arc<dyn BundledResources>,
     /// Base user directory (e.g., data/default-user)
     user_dir: PathBuf,
     /// Content repository for default presets
@@ -27,16 +27,16 @@ impl FilePresetRepository {
     ///
     /// # Arguments
     ///
-    /// * `app_handle` - Tauri app handle for path resolution
+    /// * `bundled_resources` - Host-supplied read-only resource access
     /// * `user_dir` - Base user directory path
     /// * `content_repository` - Content repository for default presets
     pub fn new(
-        app_handle: AppHandle,
+        bundled_resources: Arc<dyn BundledResources>,
         user_dir: PathBuf,
         content_repository: Arc<dyn ContentRepository>,
     ) -> Self {
         Self {
-            app_handle,
+            bundled_resources,
             user_dir,
             content_repository,
         }
@@ -132,9 +132,10 @@ impl FilePresetRepository {
                 if item_name == name {
                     // Found matching preset, load it
                     let data: Value = read_resource_json(
-                        &self.app_handle,
+                        self.bundled_resources.clone(),
                         &format!("default/content/{}", item.filename),
-                    )?;
+                    )
+                    .await?;
 
                     return Ok(Some(DefaultPreset {
                         filename: item.filename,

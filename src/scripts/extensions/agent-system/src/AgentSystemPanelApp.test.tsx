@@ -151,6 +151,7 @@ function createPanelWorld(selectedProfile = defaultProfile()) {
             return Promise.resolve(state.confirm);
         },
         downloadBlob: () => Promise.resolve({ delivered: true }),
+        notifyExportResult: () => undefined,
         notifyError: (error) => {
             state.errors.push(error instanceof Error ? error.message : 'unknown error');
         },
