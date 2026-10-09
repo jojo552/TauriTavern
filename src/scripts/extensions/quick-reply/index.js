@@ -1,4 +1,4 @@
-import { chat, chat_metadata, eventSource, event_types, getCurrentChatId, getRequestHeaders, this_chid, characters } from '../../../script.js';
+import { chat, chat_metadata, consumeQuickReplyPresetsSnapshot, eventSource, event_types, getCurrentChatId, getRequestHeaders, this_chid, characters } from '../../../script.js';
 import { extension_settings } from '../../extensions.js';
 import { QuickReplyApi } from './api/QuickReplyApi.js';
 import { AutoExecuteHandler } from './src/AutoExecuteHandler.js';
@@ -57,54 +57,59 @@ export let quickReplyApi;
 
 
 const loadSets = async () => {
-    const response = await fetch('/api/settings/get', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({}),
-    });
-
-    if (response.ok) {
-        const setList = (await response.json()).quickReplyPresets ?? [];
-        for (const set of setList) {
-            if (set.version !== 2) {
-                // migrate old QR set
-                set.version = 2;
-                set.disableSend = set.quickActionEnabled ?? false;
-                set.placeBeforeInput = set.placeBeforeInputEnabled ?? false;
-                set.injectInput = set.AutoInputInject ?? false;
-                set.qrList = set.quickReplySlots.map((slot,idx)=>{
-                    const qr = {};
-                    qr.id = idx + 1;
-                    qr.label = slot.label ?? '';
-                    qr.title = slot.title ?? '';
-                    qr.message = slot.mes ?? '';
-                    qr.isHidden = slot.hidden ?? false;
-                    qr.executeOnStartup = slot.autoExecute_appStartup ?? false;
-                    qr.executeOnUser = slot.autoExecute_userMessage ?? false;
-                    qr.executeOnAi = slot.autoExecute_botMessage ?? false;
-                    qr.executeOnChatChange = slot.autoExecute_chatLoad ?? false;
-                    qr.executeOnGroupMemberDraft = slot.autoExecute_groupMemberDraft ?? false;
-                    qr.executeOnNewChat = slot.autoExecute_newChat ?? false;
-                    qr.executeBeforeGeneration = slot.autoExecute_beforeGeneration ?? false;
-                    qr.automationId = slot.automationId ?? '';
-                    qr.contextList = (slot.contextMenu ?? []).map(it=>({
-                        set: it.preset,
-                        isChained: it.chain,
-                    }));
-                    return qr;
-                });
-            }
-            if (set.version == 2) {
-                QuickReplySet.list.push(QuickReplySet.from(JSON.parse(JSON.stringify(set))));
-            }
-        }
-        // need to load QR lists after all sets are loaded to be able to resolve context menu entries
-        setList.forEach((set, idx)=>{
-            QuickReplySet.list[idx].qrList = set.qrList.map(it=>QuickReply.from(it));
-            QuickReplySet.list[idx].init();
+    let setList = consumeQuickReplyPresetsSnapshot();
+    if (setList === null) {
+        // Outside startup (or after consumption), explicitly read fresh presets.
+        const response = await fetch('/api/settings/get', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({}),
         });
-        log('sets: ', QuickReplySet.list);
+        if (!response.ok) {
+            throw new Error(`Quick Reply settings request failed with status ${response.status}`);
+        }
+        setList = (await response.json()).quickReplyPresets ?? [];
     }
+
+    for (const set of setList) {
+        if (set.version !== 2) {
+            // migrate old QR set
+            set.version = 2;
+            set.disableSend = set.quickActionEnabled ?? false;
+            set.placeBeforeInput = set.placeBeforeInputEnabled ?? false;
+            set.injectInput = set.AutoInputInject ?? false;
+            set.qrList = set.quickReplySlots.map((slot,idx)=>{
+                const qr = {};
+                qr.id = idx + 1;
+                qr.label = slot.label ?? '';
+                qr.title = slot.title ?? '';
+                qr.message = slot.mes ?? '';
+                qr.isHidden = slot.hidden ?? false;
+                qr.executeOnStartup = slot.autoExecute_appStartup ?? false;
+                qr.executeOnUser = slot.autoExecute_userMessage ?? false;
+                qr.executeOnAi = slot.autoExecute_botMessage ?? false;
+                qr.executeOnChatChange = slot.autoExecute_chatLoad ?? false;
+                qr.executeOnGroupMemberDraft = slot.autoExecute_groupMemberDraft ?? false;
+                qr.executeOnNewChat = slot.autoExecute_newChat ?? false;
+                qr.executeBeforeGeneration = slot.autoExecute_beforeGeneration ?? false;
+                qr.automationId = slot.automationId ?? '';
+                qr.contextList = (slot.contextMenu ?? []).map(it=>({
+                    set: it.preset,
+                    isChained: it.chain,
+                }));
+                return qr;
+            });
+        }
+        if (set.version == 2) {
+            QuickReplySet.list.push(QuickReplySet.from(JSON.parse(JSON.stringify(set))));
+        }
+    }
+    // need to load QR lists after all sets are loaded to be able to resolve context menu entries
+    setList.forEach((set, idx)=>{
+        QuickReplySet.list[idx].qrList = set.qrList.map(it=>QuickReply.from(it));
+        QuickReplySet.list[idx].init();
+    });
+    log('sets: ', QuickReplySet.list);
 };
 
 const loadSettings = async () => {

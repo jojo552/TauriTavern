@@ -253,7 +253,7 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
   - 用户设定沿用上游 settings 数据形状；列表刷新不写入资料，单项保存失败不影响其他修改。
   - `/api/settings/save` 接收完整 JSON。读取与保存确认返回 `tauritavern_settings_revision`；调用方将其作为不透明令牌，以 JSON 编码经 `X-TauriTavern-Settings-Revision` 回传。过期令牌返回 409，未携带时仍可覆盖保存。Persona 修改独立确认成败。
   - `/api/settings/get` 保持上游响应形状，`settings` 仍为 JSON 字符串；启动读取与应用顺序见 [StartupOptimization §4](CurrentState/StartupOptimization.md#4-设置与-bootstrap-元数据读取)。
-- `/api/backends/chat-completions/generate` 的流式响应由 Rust 进程内会话持有生成任务、移动端 best-effort 后台执行租约与未确认事件；前端通过单调递增的 `after_seq` 消费并确认，原生 WebView 暂停后可在同一 Rust 进程内重放缺失事件。单次读取失败会使用相同 cursor 重试一次，第二次失败才关闭会话。后台租约失败或到期不拥有生成终止权；该保证不跨进程重启，也不伪装成上游 provider 的 HTTP 断点续传。浏览器的页面 session 还受 SSE 生命周期约束：SSE 断开会关闭页面 AI 会话，不自动重连或跨页面恢复，见 [BrowserHost](CurrentState/BrowserHost.md)。
+- `/api/backends/chat-completions/generate` 的流式响应由 Rust 进程内会话持有生成任务、移动端 best-effort 后台执行租约与未确认事件；前端通过单调递增的 `after_seq` 消费并确认，原生 WebView 暂停后可在同一 Rust 进程内重放缺失事件。单次读取失败会使用相同 cursor 重试一次，第二次失败才关闭会话。后台租约失败或到期不拥有生成终止权；该保证不跨进程重启，也不伪装成上游 provider 的 HTTP 断点续传。浏览器的同页 SSE 短断线会在有界回放窗口和 10 分钟恢复期内重连，页面 AI 会话不立即销毁；HTTP invoke 的未知结果不自动重放。服务器重启、过期或回放 gap 创建新页时，旧 AI/commit/file handle 失效，不承诺跨 session 延续；见 [BrowserHost](CurrentState/BrowserHost.md)。
 - `/css/user.css`：用户自定义 CSS 覆盖文件（数据目录 `_css/user.css`）
 - `/scripts/extensions/third-party/*`：third-party 扩展静态资源端点（ESM/CSS/url()/字体/图片）
 - `/thumbnail`：缩略图端点（与 `__TAURITAVERN_THUMBNAIL__` 强耦合）

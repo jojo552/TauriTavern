@@ -1,28 +1,45 @@
 // @ts-check
 
-import { createChannel } from '../../../tauri-bridge.js';
+import { createChannel, onHostSessionReset } from '../../../tauri-bridge.js';
 
 /**
  * @param {{
  *   safeInvoke: (command: string, args?: any) => Promise<any>;
  *   channelFactory?: (onmessage: (event: any) => void) => any;
+ *   sessionReset?: (handler: () => void | Promise<void>) => () => void;
  * }} deps
  * @returns {TauriTavernAgentToolsApi}
  */
-export function createAgentToolsApi({ safeInvoke, channelFactory = createChannel }) {
+export function createAgentToolsApi({ safeInvoke, channelFactory = createChannel, sessionReset = onHostSessionReset }) {
+    /** @type {Map<string, any>} Confirmed declarative registrations, not an invoke retry queue. */
+    const registrations = new Map();
+    /** @type {Set<Map<string, AbortController>>} Includes calls whose registration is not yet acknowledged. */
+    const activeCalls = new Set();
+    sessionReset(async () => {
+        for (const pending of activeCalls) {
+            for (const controller of pending.values()) controller.abort();
+            pending.clear();
+        }
+        const results = await Promise.allSettled([...registrations.values()].map(registration => registration.attach()));
+        const failures = results.filter(result => result.status === 'rejected');
+        if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Failed to restore registered extension tools');
+    });
     return {
         list(options) {
             return options === undefined
                 ? safeInvoke('list_agent_tools')
                 : safeInvoke('list_agent_tools', { dto: options });
         },
-        setEnabled(toolId, enabled) {
-            return safeInvoke('set_agent_extension_tool_enabled', { dto: { toolId, enabled } });
+        async setEnabled(toolId, enabled) {
+            await safeInvoke('set_agent_extension_tool_enabled', { dto: { toolId, enabled } });
+            const registration = registrations.get(toolId);
+            if (registration) registration.definition.enabled = enabled;
         },
         async register(definition, execute) {
             if (typeof execute !== 'function') throw new TypeError('An extension tool execute function is required');
             /** @type {Map<string, AbortController>} */
             const pending = new Map();
+            activeCalls.add(pending);
 
             /** @param {{ requestId: string; call: Omit<TauriTavernExtensionToolContext, 'signal'> & { arguments: Record<string, TauriTavernJsonValue> } }} event */
             async function executeCall({ requestId, call }) {
@@ -50,18 +67,40 @@ export function createAgentToolsApi({ safeInvoke, channelFactory = createChannel
                 }
             }
 
-            const channel = channelFactory(event => {
-                if (event.type === 'cancel') {
-                    const controller = pending.get(event.requestId);
-                    pending.delete(event.requestId);
-                    controller?.abort();
-                    return;
-                }
-                return executeCall(event).catch(error => {
-                    console.error('[AgentTools] Failed to submit extension tool result', error);
-                });
-            });
-            await safeInvoke('register_agent_extension_tool', { definition, channel });
+            const registration = {
+                definition: structuredClone(definition),
+                pending,
+                async attach() {
+                    let accepting = true;
+                    const channel = channelFactory(event => {
+                        if (!accepting) return;
+                        if (event.type === 'cancel') {
+                            const controller = pending.get(event.requestId);
+                            pending.delete(event.requestId);
+                            controller?.abort();
+                            return;
+                        }
+                        return executeCall(event).catch(error => {
+                            console.error('[AgentTools] Failed to submit extension tool result', error);
+                        });
+                    });
+                    try { await safeInvoke('register_agent_extension_tool', { definition: registration.definition, channel }); }
+                    catch (error) {
+                        accepting = false; // An unacknowledged registration cannot execute calls later.
+                        for (const controller of pending.values()) controller.abort();
+                        pending.clear();
+                        throw error;
+                    }
+                },
+            };
+            try { await registration.attach(); }
+            catch (error) {
+                for (const controller of pending.values()) controller.abort();
+                pending.clear();
+                activeCalls.delete(pending);
+                throw error;
+            }
+            registrations.set(`extension/${definition.extensionId.trim()}:${definition.name.trim()}`, registration);
         },
     };
 }

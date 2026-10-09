@@ -13,8 +13,11 @@ use crate::{error::CommandError, host::PageState};
 
 const COOKIE: &str = "tt_browser";
 const MAX_SESSIONS: usize = 64;
-/// A page must open its event stream promptly; afterwards the stream itself keeps it alive.
+/// A page must open its event stream promptly after creating its session.
 const UNCONNECTED_SESSION_LIFETIME: Duration = Duration::from_secs(120);
+/// How long a page whose event stream dropped (backgrounded tab, network change) may take to
+/// resume it before the page is closed and its resources released.
+const DETACHED_SESSION_LIFETIME: Duration = Duration::from_secs(10 * 60);
 
 pub struct Security {
     credential_digest: Vec<u8>,
@@ -28,9 +31,62 @@ pub struct Session {
     pub id: String,
     pub csrf: String,
     pub browser: String,
-    created: Instant,
     pub page: PageState,
-    pub event_connected: std::sync::atomic::AtomicBool,
+    streams: Mutex<StreamState>,
+}
+
+struct StreamState {
+    /// Open event streams of this page; normally one, briefly two while a reconnect replaces
+    /// the dropped connection.
+    attached: usize,
+    ever_attached: bool,
+    /// When the page last had no stream: its creation, or its last stream ending.
+    detached_since: Instant,
+}
+
+impl StreamState {
+    /// `now` is a value so grace boundaries can be checked without wall-clock waits.
+    fn expired_at(&self, now: Instant) -> bool {
+        let lifetime = if self.ever_attached {
+            DETACHED_SESSION_LIFETIME
+        } else {
+            UNCONNECTED_SESSION_LIFETIME
+        };
+        self.attached == 0 && now.duration_since(self.detached_since) >= lifetime
+    }
+}
+
+/// Created only by the registry's atomic stream claim. It stays alive with the SSE body.
+/// Dropping a connection starts the grace period, not page cleanup.
+pub struct StreamGuard {
+    session: Arc<Session>,
+}
+
+impl StreamGuard {
+    pub fn session(&self) -> &Arc<Session> {
+        &self.session
+    }
+}
+
+impl Drop for StreamGuard {
+    fn drop(&mut self) {
+        let mut state = self
+            .session
+            .streams
+            .lock()
+            .expect("session stream state poisoned");
+        state.attached -= 1;
+        if state.attached == 0 {
+            state.detached_since = Instant::now();
+        }
+    }
+}
+
+pub enum StreamClaim {
+    Attached(StreamGuard),
+    /// A missing session (including a server restart), or an owned session whose grace ended.
+    /// Removed sessions are returned so the host can finish asynchronous resource cleanup.
+    Expired(Option<Arc<Session>>),
 }
 
 fn random_token() -> String {
@@ -132,9 +188,12 @@ impl Security {
             id: random_token(),
             csrf: random_token(),
             browser: browser.clone(),
-            created: Instant::now(),
             page: PageState::default(),
-            event_connected: std::sync::atomic::AtomicBool::new(false),
+            streams: Mutex::new(StreamState {
+                attached: 0,
+                ever_attached: false,
+                detached_since: Instant::now(),
+            }),
         });
         sessions.insert(session.id.clone(), session.clone());
         let cookie = existing.is_none().then(|| {
@@ -153,54 +212,119 @@ impl Security {
         require_csrf: bool,
     ) -> Result<Arc<Session>, CommandError> {
         self.same_origin(headers)?;
+        let sessions = self.sessions.lock().expect("session registry poisoned");
+        let session = sessions.get(id).ok_or_else(|| {
+            CommandError::Unauthorized("Browser session expired; reload the page".into())
+        })?;
+        authorize_session(headers, session, require_csrf)?;
+        let state = session
+            .streams
+            .lock()
+            .expect("session stream state poisoned");
+        if state.expired_at(Instant::now()) || session.page.bus.closed().is_cancelled() {
+            return Err(CommandError::Unauthorized(
+                "Browser session expired; reload the page".into(),
+            ));
+        }
+        Ok(session.clone())
+    }
+
+    /// Ownership, grace and the attached count are one registry operation. The fixed lock order
+    /// is registry -> streams: expiry cannot remove a session between lookup and attaching it.
+    pub fn claim_stream(&self, headers: &HeaderMap, id: &str) -> Result<StreamClaim, CommandError> {
+        self.claim_stream_at(headers, id, None)
+    }
+
+    fn claim_stream_at(
+        &self,
+        headers: &HeaderMap,
+        id: &str,
+        now: Option<Instant>,
+    ) -> Result<StreamClaim, CommandError> {
+        self.same_origin(headers)?;
+        let mut sessions = self.sessions.lock().expect("session registry poisoned");
+        let Some(session) = sessions.get(id).cloned() else {
+            if browser_cookie(headers).is_none() {
+                return Err(CommandError::Unauthorized("Missing browser cookie".into()));
+            }
+            return Ok(StreamClaim::Expired(None));
+        };
+        // Reject another browser even when this session's grace has already elapsed.
+        authorize_session(headers, &session, false)?;
+        let mut state = session
+            .streams
+            .lock()
+            .expect("session stream state poisoned");
+        if state.expired_at(now.unwrap_or_else(Instant::now)) {
+            sessions.remove(id);
+            session.page.bus.close();
+            drop(state);
+            return Ok(StreamClaim::Expired(Some(session)));
+        }
+        state.attached += 1;
+        state.ever_attached = true;
+        drop(state);
+        Ok(StreamClaim::Attached(StreamGuard { session }))
+    }
+
+    pub fn remove_session(&self, id: &str) -> Option<Arc<Session>> {
         let session = self
             .sessions
             .lock()
             .expect("session registry poisoned")
-            .get(id)
-            .cloned()
-            .ok_or_else(|| {
-                CommandError::Unauthorized("Browser session expired; reload the page".into())
-            })?;
-        if browser_cookie(headers).as_deref() != Some(session.browser.as_str()) {
-            return Err(CommandError::Unauthorized(
-                "Session does not belong to this browser".into(),
-            ));
-        }
-        if require_csrf {
-            let csrf = headers
-                .get("x-tt-csrf")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or_default();
-            if !constant_time_equal(csrf.as_bytes(), session.csrf.as_bytes()) {
-                return Err(CommandError::Unauthorized("Invalid CSRF token".into()));
-            }
-        }
-        Ok(session)
+            .remove(id)?;
+        session.page.bus.close();
+        Some(session)
     }
 
-    pub fn remove_session(&self, id: &str) -> Option<Arc<Session>> {
-        self.sessions
-            .lock()
-            .expect("session registry poisoned")
-            .remove(id)
-    }
     pub fn expired_sessions(&self) -> Vec<Arc<Session>> {
+        self.expired_sessions_at(None)
+    }
+
+    fn expired_sessions_at(&self, now: Option<Instant>) -> Vec<Arc<Session>> {
         let mut sessions = self.sessions.lock().expect("session registry poisoned");
         let ids: Vec<_> = sessions
             .iter()
             .filter(|(_, session)| {
-                !session
-                    .event_connected
-                    .load(std::sync::atomic::Ordering::SeqCst)
-                    && session.created.elapsed() > UNCONNECTED_SESSION_LIFETIME
+                let state = session
+                    .streams
+                    .lock()
+                    .expect("session stream state poisoned");
+                state.expired_at(now.unwrap_or_else(Instant::now))
+                    || session.page.bus.closed().is_cancelled()
             })
             .map(|(id, _)| id.clone())
             .collect();
         ids.into_iter()
-            .filter_map(|id| sessions.remove(&id))
+            .filter_map(|id| {
+                let session = sessions.remove(&id)?;
+                session.page.bus.close();
+                Some(session)
+            })
             .collect()
     }
+}
+
+fn authorize_session(
+    headers: &HeaderMap,
+    session: &Session,
+    require_csrf: bool,
+) -> Result<(), CommandError> {
+    if browser_cookie(headers).as_deref() != Some(session.browser.as_str()) {
+        return Err(CommandError::Unauthorized(
+            "Session does not belong to this browser".into(),
+        ));
+    }
+    if require_csrf {
+        let csrf = headers
+            .get("x-tt-csrf")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        if !constant_time_equal(csrf.as_bytes(), session.csrf.as_bytes()) {
+            return Err(CommandError::Unauthorized("Invalid CSRF token".into()));
+        }
+    }
+    Ok(())
 }
 
 /// The browser identity cookie, validated; downloads are bound to it like page sessions.
@@ -246,6 +370,143 @@ mod tests {
         headers.remove("cookie");
         assert!(security.session(&headers, &session.id, false).is_err());
     }
+    fn owner_headers(session: &Session) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "cookie",
+            format!("{COOKIE}={}", session.browser).parse().unwrap(),
+        );
+        headers
+    }
+
+    fn attached(claim: StreamClaim) -> StreamGuard {
+        match claim {
+            StreamClaim::Attached(guard) => guard,
+            StreamClaim::Expired(_) => panic!("expected a live session"),
+        }
+    }
+
+    #[test]
+    fn stream_claim_preserves_owner_and_origin_checks_even_for_expired_sessions() {
+        let security = security();
+        let (session, _) = security.create_session(&HeaderMap::new()).unwrap();
+        let owner = owner_headers(&session);
+        let created = session.streams.lock().unwrap().detached_since;
+        let expired = created + UNCONNECTED_SESSION_LIFETIME;
+        let mut wrong_cookie = owner.clone();
+        wrong_cookie.insert(
+            "cookie",
+            format!("{COOKIE}={}", "0".repeat(64)).parse().unwrap(),
+        );
+        assert!(matches!(
+            security.claim_stream_at(&wrong_cookie, &session.id, Some(expired)),
+            Err(CommandError::Unauthorized(_))
+        ));
+        let mut wrong_origin = owner.clone();
+        wrong_origin.insert("origin", "https://evil.example".parse().unwrap());
+        assert!(matches!(
+            security.claim_stream_at(&wrong_origin, &session.id, Some(expired)),
+            Err(CommandError::Unauthorized(_))
+        ));
+        let claim = security
+            .claim_stream_at(&owner, &session.id, Some(expired))
+            .unwrap();
+        assert!(matches!(claim, StreamClaim::Expired(Some(ref old)) if Arc::ptr_eq(old, &session)));
+        assert!(session.page.bus.closed().is_cancelled());
+        assert!(matches!(
+            security.claim_stream(&owner, &session.id).unwrap(),
+            StreamClaim::Expired(None)
+        ));
+        assert!(
+            security
+                .claim_stream(&HeaderMap::new(), &session.id)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn stream_claim_and_expiry_cannot_revive_or_remove_an_attached_session() {
+        let security = security();
+        let (session, _) = security.create_session(&HeaderMap::new()).unwrap();
+        let owner = owner_headers(&session);
+        let created = session.streams.lock().unwrap().detached_since;
+        let first = attached(
+            security
+                .claim_stream_at(&owner, &session.id, Some(created))
+                .unwrap(),
+        );
+        let second = attached(
+            security
+                .claim_stream_at(&owner, &session.id, Some(created))
+                .unwrap(),
+        );
+        // Claim wins the registry ordering: even a later expiry sweep cannot remove a live body.
+        assert!(
+            security
+                .expired_sessions_at(Some(created + DETACHED_SESSION_LIFETIME))
+                .is_empty()
+        );
+        drop(first);
+        assert!(
+            security
+                .expired_sessions_at(Some(created + DETACHED_SESSION_LIFETIME))
+                .is_empty()
+        );
+        drop(second);
+        let detached = session.streams.lock().unwrap().detached_since;
+        assert!(
+            security
+                .expired_sessions_at(Some(
+                    detached + DETACHED_SESSION_LIFETIME - Duration::from_nanos(1)
+                ))
+                .is_empty()
+        );
+        let resumed = attached(
+            security
+                .claim_stream_at(
+                    &owner,
+                    &session.id,
+                    Some(detached + DETACHED_SESSION_LIFETIME - Duration::from_nanos(1)),
+                )
+                .unwrap(),
+        );
+        assert!(Arc::ptr_eq(&resumed.session, &session));
+        drop(resumed);
+        let detached = session.streams.lock().unwrap().detached_since;
+        // Expiry wins the registry ordering: a later claim cannot revive the removed page.
+        let expired = security.expired_sessions_at(Some(detached + DETACHED_SESSION_LIFETIME));
+        assert_eq!(expired.len(), 1);
+        assert!(Arc::ptr_eq(&expired[0], &session));
+        assert!(matches!(
+            security.claim_stream(&owner, &session.id).unwrap(),
+            StreamClaim::Expired(None)
+        ));
+        assert!(session.page.bus.closed().is_cancelled());
+    }
+
+    #[test]
+    fn an_expired_detached_session_cannot_be_revived_before_the_cleanup_sweep() {
+        let security = security();
+        let (session, _) = security.create_session(&HeaderMap::new()).unwrap();
+        let owner = owner_headers(&session);
+        let guard = attached(security.claim_stream(&owner, &session.id).unwrap());
+        drop(guard);
+        let detached = session.streams.lock().unwrap().detached_since;
+        assert!(matches!(
+            security
+                .claim_stream_at(
+                    &owner,
+                    &session.id,
+                    Some(detached + DETACHED_SESSION_LIFETIME)
+                )
+                .unwrap(),
+            StreamClaim::Expired(Some(_))
+        ));
+        assert!(security.expired_sessions().is_empty());
+        assert!(security.session(&owner, &session.id, false).is_err());
+        assert!(session.page.bus.closed().is_cancelled());
+    }
+
     #[test]
     fn authentication_rejects_missing_credentials_and_rebinding_host() {
         let security = security();

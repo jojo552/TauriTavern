@@ -60,14 +60,18 @@ async function main() {
         headers: headers({ accept: 'text/event-stream' }),
     });
     check(events.ok, `events failed ${events.status}`);
-    const reader = events.body.getReader();
+    let reader = events.body.getReader();
     const readyText = new TextDecoder().decode((await reader.read()).value);
     check(readyText.includes('"type":"ready"') && readyText.includes(session.sessionId), `first SSE frame must be ready: ${readyText}`);
 
     const secondStream = await fetch(`${base}/__tt/events?sessionId=${session.sessionId}`, {
         headers: headers({ accept: 'text/event-stream' }),
     });
-    check(secondStream.status === 409, `a second event stream must be refused, got ${secondStream.status}`);
+    check(secondStream.ok, `a replacement page stream must resume, got ${secondStream.status}`);
+    await reader.cancel();
+    reader = secondStream.body.getReader();
+    const resumedReady = new TextDecoder().decode((await reader.read()).value);
+    check(resumedReady.includes('"type":"ready"'), 'replacement stream must begin with ready');
 
     async function invoke(command, args = {}, options = {}) {
         const requestHeaders = headers({ 'x-tt-csrf': session.csrfToken });

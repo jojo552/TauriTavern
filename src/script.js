@@ -1110,6 +1110,19 @@ async function fetchSettingsSnapshot() {
     return response.json();
 }
 
+// Only the quick-reply slice is handed off; never retain the full settings response.
+let primedQuickReplyPresets = null;
+
+export function primeQuickReplyPresetsSnapshot(snapshot) {
+    primedQuickReplyPresets = snapshot;
+}
+
+export function consumeQuickReplyPresetsSnapshot() {
+    const snapshot = primedQuickReplyPresets;
+    primedQuickReplyPresets = null;
+    return snapshot;
+}
+
 //MARK: firstLoadInit
 async function firstLoadInit() {
     const startupStatus = createStartupStatusOverlay();
@@ -1183,6 +1196,7 @@ async function firstLoadInit() {
             && settingsSnapshot?.result != 'file not find'
             && Boolean(settingsSnapshot?.settings);
         const extensionsDiscoveryPromise = extensionsEnabled ? startOfflineExtensionsDiscovery() : null;
+        primeQuickReplyPresetsSnapshot(extensionsEnabled ? settingsSnapshot.quickReplyPresets ?? [] : null);
         primeSecretStateSnapshot(bootstrapMetadata.secret_state);
         await readSecretState();
         await clientVersionPromise;
@@ -1311,6 +1325,8 @@ async function firstLoadInit() {
         })();
 
     } finally {
+        // Disabled, unavailable or failed quick-reply activation must not retain startup data.
+        primeQuickReplyPresetsSnapshot(null);
         startupStatus.remove();
     }
 }

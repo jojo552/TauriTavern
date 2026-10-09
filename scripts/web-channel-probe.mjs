@@ -39,7 +39,14 @@ async function openPage() {
         if (!r.ok) throw Object.assign(new Error(`${command}: ${JSON.stringify(v)}`), { status: r.status });
         return v;
     }
-    return { session, nextFrame, invoke, close: () => controller.abort() };
+    return { session, nextFrame, invoke, close: async () => {
+        const response = await fetch(base + '/__tt/session/close', {
+            method: 'POST', headers: h({ cookie, 'content-type': 'application/json', 'x-tt-csrf': session.csrfToken }),
+            body: JSON.stringify({ sessionId: session.sessionId }),
+        });
+        check(response.status === 204, 'page close must confirm cleanup');
+        controller.abort();
+    } };
 }
 
 const page = await openPage();
@@ -70,9 +77,8 @@ check(await other.invoke('resolve_agent_extension_tool_call', { dto: { requestId
     'resolving an unknown call must report false');
 
 // Closing the page clears its tools.
-page.close();
-await new Promise(r => setTimeout(r, 1500));
+await page.close();
 const after = JSON.stringify(await other.invoke('list_agent_tools', {}));
 check(!after.includes('"probe'), 'closing the page must unregister its tools');
-other.close();
+await other.close();
 console.log('channel probe ok (toolId=' + toolId + ')');

@@ -19,10 +19,10 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 1. [transport](../../src/web/transport.js) 以同源凭据请求 `GET /__tt/session`，取得随机 `sessionId` 与 `csrfToken`；响应为 `no-store`。
 2. 服务端用 `tt_browser` Cookie 绑定浏览器：`HttpOnly; SameSite=Strict; Path=/`，HTTPS origin 再加 `Secure`。同一 Cookie 下各页面仍分别创建 session。
-3. `GET /__tt/events?sessionId=...` 校验 session 属于该 Cookie；每个页面只能接入一条 SSE。transport 收到匹配 session 的首个 `ready` 帧后才允许 invoke 正常开始。
+3. `GET /__tt/events?sessionId=...` 校验 session 属于该 Cookie；同页新的 SSE 接入会替代旧流。transport 收到匹配 session 的首个 `ready` 帧后才允许 invoke 正常开始。断线重开带 `after` cursor；原生 `Last-Event-ID` 也进入同一校验入口，同时提供的 cursor 必须一致。
 4. `POST /__tt/invoke` 的 JSON envelope 为 `{ sessionId, command, args }`，每次 invoke 都携带并校验 `x-tt-csrf`，不仅是写命令。共享 `/csrf-token` 路由返回这个真实 token；原生 Tauri 的兼容 token 不能用于 HTTP host。
 
-当前 session 注册上限为 64；创建后 120 秒仍未建立 SSE 的 session 由到期清理处理。Cookie、页面 session 与资源句柄是不同生命周期，不应混为一个全局 session。
+当前 session 注册上限为 64；创建后 120 秒仍未建立 SSE 的 session 由到期清理处理。建立过 SSE 的页面在最后一条流结束后有 10 分钟恢复期，短暂切后台或网络变更不立即销毁资源；超过期限不能通过迟到重连复活。流认领与到期回收共享 Security 的原子生命周期入口。真正离开页面（非 BFCache 的 pagehide）发出带 CSRF 的 keepalive `POST /__tt/session/close`，立即释放该页的工具和资源；临时切后台没有 pagehide，不进入此清理。Cookie、页面 session 与资源句柄是不同生命周期，不应混为一个全局 session。
 
 ## 3. HTTP bytes、SSE 与 Channel
 
@@ -36,10 +36,13 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 - Channel 参数序列化为 `{ "$channel": "<id>" }`；ID 只属于创建它的页面，且每个 ID 只能打开一次。
 - `channel` 帧带从 0 开始、严格递增的 `sequence`，`channel-end` 结束该 Channel；前端拒绝未知或乱序帧。
-- Channel 生命周期由后端持有它的任务/注册项决定，不在每次发起它的 invoke 返回时一律删除；页面断开后不能继续复用。
-- SSE 断开或协议错误时，transport 关闭 EventSource、终止待处理请求并清理 listener/Channel，不允许 EventSource 隐式重连，也不自动重放命令。待处理命令可能已执行，页面须重新加载建立新 session，不能把网络中止当成后端回滚。
+- Channel 生命周期由后端持有它的任务/注册项决定，不在每次发起它的 invoke 返回时一律删除；同 session 短暂断线保留 channels、listeners 与资源。
+- 数据帧还有页面级 SSE `id`；ready/reset 控制帧无 id，不能推进数据 cursor。PageBus 保存最多 4096 帧、总序列化 JSON 16 MiB 的滚动回放窗口，淘汰最旧帧不是永久毒化在线页面。cursor 落在窗口外、在线消费者落后或超大单帧时明确 reset；字节上限不是上游 Value 构造的瞬时内存上限。
+- SSE 断线后，transport 关闭旧 EventSource，以 1 秒到最多 10 秒退避显式重开同页 SSE，从最后已派发 `id` 继续，不重新执行已经派发的异步回调。只有这一条前端恢复路径；旧 source 的迟到回调被 identity/epoch fence 拒绝。重连状态向用户可见。
+- SSE 本身断开不强制中止仍可得到成功响应的 HTTP 保存。实际 HTTP 中断只报告结果未知，绝不自动重放 invoke；一次性 commit 的 offset 与最终确认规则保持不变。
+- 合法 owner 的 session 消失（服务器重启/过期）或回放 gap，服务器返回无 id `{type:'session-reset', reason:'expired'|'gap'}`，结束旧页。前端创建新 session/CSRF，失败的旧请求不重放；后续独立请求可继续。错误 origin/cookie 仍拒绝，不能伪装为 reset。
 
-SSE 结束会移除页面 session、取消页面 AI 会话、清理页面 extension tool、关闭 reader 与未完成 commit。共享服务中已经发布的数据不因此撤销。
+页面到期或确定不能恢复时，清理 AI、extension tools、reader 与未完成 commit，已发布数据不撤销。新 session 使旧文件资源失效：浏览器 numeric handles 单调分配并映射 server ids，旧句柄不能读/关新页同号资源；迟到旧响应也不得登记到新页。冷滑动 projection 不改存储内容，引用按 epoch 校验，缺失滑动记录必须重新打开聊天，不能删 marker 后按完整 payload 保存。Agent 工具仅重建已经确认的声明式注册/启用状态，旧 pending callback 取消；不自动恢复旧 generation、live subscription 或 commit。
 
 ## 4. 文件传输与隔离边界
 

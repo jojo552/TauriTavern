@@ -7,7 +7,6 @@
 
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
@@ -49,10 +48,10 @@ use tt_runtime::extension_tools::AgentExtensionTools;
 
 use crate::ai::AiSession;
 use crate::error::CommandError;
-use crate::events::{PageBus, PageChannel};
+use crate::events::{PageBus, PageChannel, PageStream, ResumeError};
 use crate::files::HostFiles;
 use crate::resources::{ResourceReply, SessionResources};
-use crate::security::{Security, Session};
+use crate::security::{Security, Session, StreamClaim, StreamGuard};
 
 /// Raw invoke bodies are bounded by the largest native frame (4 MiB) plus headroom.
 const MAX_INVOKE_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -94,6 +93,7 @@ pub struct PageState {
 pub fn router(host: Arc<Host>) -> Router {
     Router::new()
         .route("/__tt/session", get(create_session))
+        .route("/__tt/session/close", post(close_page))
         .route("/__tt/events", get(events))
         .route("/__tt/invoke", post(invoke))
         .fallback(static_or_resource)
@@ -184,22 +184,59 @@ async fn create_session(State(host): State<Arc<Host>>, headers: HeaderMap) -> Re
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct EventsQuery {
+struct ClosePage {
     session_id: String,
 }
 
-/// Closes the page's resources when the browser's events stream ends (navigation, reload, close).
-struct PageGuard {
-    host: Arc<Host>,
-    session: Arc<Session>,
+/// Explicit navigation/close is not an accidental network loss. Release registrations before
+/// the replacement page starts; retain the grace period only for disconnected live tabs.
+async fn close_page(
+    State(host): State<Arc<Host>>,
+    headers: HeaderMap,
+    Json(page): Json<ClosePage>,
+) -> Result<StatusCode, CommandError> {
+    let session = host.security.session(&headers, &page.session_id, true)?;
+    terminate_page(host, session);
+    Ok(StatusCode::NO_CONTENT)
 }
 
-impl Drop for PageGuard {
-    fn drop(&mut self) {
-        let host = self.host.clone();
-        let session = self.session.clone();
-        tokio::spawn(async move { close_session(&host, session).await });
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EventsQuery {
+    session_id: String,
+    /// Cursor for an explicitly reopened EventSource; native reconnect uses Last-Event-ID.
+    after: Option<u64>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ResetReason {
+    Expired,
+    Gap,
+}
+
+fn session_reset(reason: ResetReason) -> Event {
+    // Control frames must not advance the browser's data cursor.
+    Event::default().data(json!({ "type": "session-reset", "reason": reason }).to_string())
+}
+
+fn events_cursor(headers: &HeaderMap, after: Option<u64>) -> Result<Option<u64>, CommandError> {
+    let last_seen = headers
+        .get("last-event-id")
+        .map(|value| {
+            value
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .ok_or_else(|| CommandError::BadRequest("Invalid Last-Event-ID".into()))
+        })
+        .transpose()?;
+    if let (Some(header), Some(query)) = (last_seen, after)
+        && header != query
+    {
+        return Err(CommandError::BadRequest("Conflicting event cursors".into()));
     }
+    Ok(last_seen.or(after))
 }
 
 pub async fn close_session(host: &Host, session: Arc<Session>) {
@@ -212,38 +249,79 @@ pub async fn close_session(host: &Host, session: Arc<Session>) {
     }
 }
 
+/// Stop admitting work before starting asynchronous cleanup, even if the response is dropped.
+fn terminate_page(host: Arc<Host>, session: Arc<Session>) {
+    host.security.remove_session(&session.id);
+    session.page.bus.close();
+    host.extension_tools.clear_page(&session.id);
+    tokio::spawn(async move { close_session(&host, session).await });
+}
+
+fn reset_response(reason: ResetReason) -> Response {
+    Sse::new(futures_util::stream::once(async move {
+        Ok::<_, Infallible>(session_reset(reason))
+    }))
+    .into_response()
+}
+
 async fn events(
     State(host): State<Arc<Host>>,
     headers: HeaderMap,
     Query(query): Query<EventsQuery>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, CommandError> {
-    let session = host.security.session(&headers, &query.session_id, false)?;
-    if session.event_connected.swap(true, Ordering::SeqCst) {
-        return Err(CommandError::Conflict(
-            "Page event stream already connected; reload the page".into(),
-        ));
-    }
-    let receiver = session.page.bus.take_receiver().ok_or_else(|| {
-        CommandError::Conflict("Page event stream already connected; reload the page".into())
-    })?;
-    let guard = PageGuard {
-        host: host.clone(),
-        session: session.clone(),
+) -> Result<Response, CommandError> {
+    let last_seen = events_cursor(&headers, query.after)?;
+    let guard = match host.security.claim_stream(&headers, &query.session_id)? {
+        StreamClaim::Attached(guard) => guard,
+        StreamClaim::Expired(session) => {
+            if let Some(session) = session {
+                terminate_page(host, session);
+            }
+            return Ok(reset_response(ResetReason::Expired));
+        }
     };
-    let ready =
-        Event::default().data(json!({ "type": "ready", "sessionId": session.id }).to_string());
-    let stream = page_stream(ready, receiver, guard);
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(20))))
+    let stream = match guard.session().page.bus.attach(last_seen) {
+        Ok(stream) => stream,
+        Err(ResumeError::Gap) => {
+            terminate_page(host, guard.session().clone());
+            return Ok(reset_response(ResetReason::Gap));
+        }
+        Err(ResumeError::Closed) => {
+            return Err(CommandError::Unauthorized("Browser session closed".into()));
+        }
+    };
+    let ready = Event::default()
+        .data(json!({ "type": "ready", "sessionId": guard.session().id }).to_string());
+    Ok(Sse::new(page_stream(host, ready, stream, guard))
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(20)))
+        .into_response())
 }
 
 fn page_stream(
+    host: Arc<Host>,
     ready: Event,
-    receiver: tokio::sync::mpsc::Receiver<String>,
-    guard: PageGuard,
+    stream: PageStream,
+    guard: StreamGuard,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
-    // The guard lives as long as the browser keeps the stream open; dropping it closes the page.
-    let frames = tokio_stream::wrappers::ReceiverStream::new(receiver)
-        .map(|frame| Ok(Event::default().data(frame)));
+    let session = guard.session().clone();
+    let frames = futures_util::stream::unfold(Some(stream), move |stream| {
+        let host = host.clone();
+        let session = session.clone();
+        async move {
+            let mut stream = stream?;
+            match stream.next().await {
+                Ok(Some((id, frame))) => Some((
+                    Ok(Event::default().id(id.to_string()).data(frame)),
+                    Some(stream),
+                )),
+                Err(ResumeError::Gap) => {
+                    terminate_page(host, session);
+                    Some((Ok(session_reset(ResetReason::Gap)), None))
+                }
+                Ok(None) | Err(ResumeError::Closed) => None,
+            }
+        }
+    });
+    // The atomic claim's guard lives as long as the browser keeps this connection open.
     futures_util::stream::once(async move { Ok(ready) })
         .chain(frames)
         .map(move |event| {
@@ -264,15 +342,17 @@ struct JsonInvoke {
 }
 
 async fn invoke(State(host): State<Arc<Host>>, headers: HeaderMap, body: Bytes) -> Response {
+    let mut command_name = None;
     let result = async {
         let content_type = headers
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with("application/octet-stream") {
+            let command = required(&headers, "x-tt-command")?;
+            command_name = Some(command.to_owned());
             let session_id = required(&headers, "x-tt-session")?;
             let session = host.security.session(&headers, session_id, true)?;
-            let command = required(&headers, "x-tt-command")?;
             return raw_invoke(&host, &session, command, &headers, &body).await;
         }
         if !content_type.starts_with("application/json") {
@@ -283,6 +363,7 @@ async fn invoke(State(host): State<Arc<Host>>, headers: HeaderMap, body: Bytes) 
         let request: JsonInvoke = serde_json::from_slice(&body).map_err(|error| {
             CommandError::BadRequest(format!("Invalid invoke request: {error}"))
         })?;
+        command_name = Some(request.command.clone());
         let session = host.security.session(&headers, &request.session_id, true)?;
         dispatch(&host, &session, &request.command, request.args).await
     }
@@ -297,7 +378,12 @@ async fn invoke(State(host): State<Arc<Host>>, headers: HeaderMap, body: Bytes) 
             bytes,
         )
             .into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => {
+            // All branches share one diagnostic boundary, including resources/commit/session
+            // errors that previously returned before the command-dispatch warning.
+            tracing::warn!(command = command_name.as_deref().unwrap_or("<invalid>"), error = %error, "HTTP invoke failed");
+            error.into_response()
+        }
     }
 }
 
@@ -326,10 +412,7 @@ async fn raw_invoke(
     match crate::commands::raw(host, &host.services, command, headers, body).await {
         Ok(Some(value)) => return Ok(ResourceReply::Json(value)),
         Ok(None) => {}
-        Err(error) => {
-            tracing::warn!(command, error = %error, "HTTP raw invoke failed");
-            return Err(error);
-        }
+        Err(error) => return Err(error),
     }
     Err(CommandError::BadRequest(format!(
         "Command {command} does not accept a raw body in the browser host"
@@ -360,15 +443,9 @@ async fn dispatch(
     if let Some(value) = host_command(host, command, &args).await? {
         return Ok(ResourceReply::Json(value));
     }
-    // A page that calls an unavailable or misspelled command is only visible here: the response
-    // carries the error, and the server log must name the command to make it diagnosable.
-    match crate::commands::dispatch(host, services, command, args).await {
-        Ok(value) => Ok(ResourceReply::Json(value)),
-        Err(error) => {
-            tracing::warn!(command, error = %error, "HTTP invoke failed");
-            Err(error)
-        }
-    }
+    Ok(ResourceReply::Json(
+        crate::commands::dispatch(host, services, command, args).await?,
+    ))
 }
 
 fn arg<T: serde::de::DeserializeOwned>(args: &Value, name: &str) -> Result<T, CommandError> {
@@ -651,4 +728,59 @@ pub fn inject_host_identity(index_html: &str) -> Result<String, String> {
         return Err("index.html must contain exactly one <head> element".into());
     }
     Ok(index_html.replacen(MARKER, script, 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_and_explicit_event_reconnect_share_one_cursor_and_reject_conflicts() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(events_cursor(&headers, None).unwrap(), None);
+        assert_eq!(events_cursor(&headers, Some(0)).unwrap(), Some(0));
+        headers.insert("last-event-id", "0".parse().unwrap());
+        assert_eq!(events_cursor(&headers, None).unwrap(), Some(0));
+        assert_eq!(events_cursor(&headers, Some(0)).unwrap(), Some(0));
+        assert!(matches!(
+            events_cursor(&headers, Some(1)),
+            Err(CommandError::BadRequest(_))
+        ));
+        headers.insert("last-event-id", "invalid".parse().unwrap());
+        assert!(matches!(
+            events_cursor(&headers, Some(0)),
+            Err(CommandError::BadRequest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn session_reset_is_a_terminal_default_sse_message_without_a_data_cursor() {
+        for (reason, expected) in [(ResetReason::Expired, "expired"), (ResetReason::Gap, "gap")] {
+            let response = reset_response(reason);
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers()[header::CONTENT_TYPE],
+                "text/event-stream"
+            );
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            // Reading the complete body deterministically verifies the reset closes the stream;
+            // the only SSE field is data (no id or named event).
+            let mut lines = body.lines().filter(|line| !line.is_empty());
+            let data = lines
+                .next()
+                .unwrap()
+                .strip_prefix("data:")
+                .unwrap()
+                .trim_start();
+            assert!(lines.next().is_none());
+            let control: Value = serde_json::from_str(data).unwrap();
+            assert_eq!(
+                control,
+                json!({ "type": "session-reset", "reason": expected })
+            );
+        }
+    }
 }

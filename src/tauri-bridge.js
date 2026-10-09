@@ -11,7 +11,20 @@ export function isProjectHost() { return isWebHost() || detectTauriEnv(); }
 let webTransport;
 function getWebTransport() {
     if (!isWebHost()) throw new Error('Web transport requires an explicit browser/web host identity');
-    webTransport ??= createWebTransport();
+    if (webTransport) return webTransport;
+    webTransport = createWebTransport({
+        onState(state) {
+            if (state === 'reconnecting') {
+                globalThis.toastr?.warning?.('连接暂时中断，正在恢复。已发出的保存不会自动重发。', '正在重新连接', { timeOut: 5000 });
+            } else if (state === 'reset') {
+                globalThis.toastr?.warning?.('服务器会话已重建；未加载的聊天滑动记录和打开的文件需重新打开。当前页面内容不会自动覆盖。', '服务器会话重置', { timeOut: 8000 });
+            }
+        },
+    });
+    window.addEventListener('pagehide', event => {
+        // A BFCache page may return with its readers intact; don't treat it as closed.
+        if (!event.persisted) void webTransport.dispose().catch(error => console.warn('Failed to close browser page session', error));
+    });
     return webTransport;
 }
 
@@ -110,6 +123,13 @@ export const listen = (...args) => {
     }
     return fn(...args);
 };
+
+// Project lifecycle: a short SSE reconnect keeps the epoch; a new server page invalidates
+// resources and lets declarative consumers rebuild their confirmed registrations.
+export function hostSessionEpoch() { return isWebHost() ? getWebTransport().sessionEpoch() : 0; }
+export function onHostSessionReset(handler) {
+    return isWebHost() ? getWebTransport().onSessionReset(handler) : () => {};
+}
 
 export function createChannel(onmessage) {
     if (isWebHost()) return getWebTransport().createChannel(onmessage);

@@ -105,6 +105,16 @@
 
 设置与角色是启动必需数据，失败会阻止启动；群组、头像或密钥状态失败时保留可见错误并仅禁用对应能力，不阻止 `APP_READY`。
 
+### 4.1 快速回复复用本次设置读取
+
+`firstLoadInit()` 将已经解析的 `settingsSnapshot.quickReplyPresets` 交给 `primeQuickReplyPresetsSnapshot()`；仅保留这一 feature 的数组引用，不复制完整设置树，不新增全 settings 缓存、TTL 或宿主专用分支。缺少 `quickReplyPresets` 时交接空数组，仍表示本次读取已经完成。
+
+快速回复仍由既有系统扩展激活流程调用 `init()`。`loadSets()` 先调用 `consumeQuickReplyPresetsSnapshot()`，取走数组时立即清空交接槽，再执行原有 QR v1 → v2 迁移和“两遍加载”（先注册全部集合，再恢复回复与 context links）。全局/聊天/角色配置、UI 与 `APP_READY` 自动执行的初始化顺序不变。
+
+消费后的后续调用、或启动之后才首次激活的快速回复，会显式读取 fresh `/api/settings/get`；非成功 HTTP 状态和 JSON 解析失败直接拒绝激活，不 catch 后静默重取。启动 `finally` 会清空尚未消费的交接槽，所以 QR 被禁用、不可用、激活失败或启动提前退出都不会留下启动 snapshot。交接函数位于本来已被 QR 静态依赖的 `script.js`，主程序没有提前 import QR feature；没有新增 runtime module 或 import edge，既有 ESM/Rspack 打包依赖图不变。
+
+行为覆盖见 [quick-reply-startup.test.mjs](../../tests/browser/quick-reply-startup.test.mjs)：实际 feature `init()` 验证启动不重复请求、空数组消费、消费/丢弃后 fresh 读取、迁移与前向 context links，以及 HTTP/解析/非法 snapshot 错误传播。
+
 后端采样入口见 [bootstrap_commands.rs](../../src-tauri/crates/tauritavern/src/presentation/commands/bootstrap_commands.rs)。
 
 ---
