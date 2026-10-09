@@ -7,7 +7,7 @@ export {};
  */
 
 /**
- * @typedef {(command: TauriInvokeCommand, args?: any, options?: { headers?: HeadersInit }) => Promise<any>} TauriInvokeFn
+ * @typedef {(command: TauriInvokeCommand, args?: any, options?: { headers?: HeadersInit; compressible?: boolean }) => Promise<any>} TauriInvokeFn
  */
 
 /**

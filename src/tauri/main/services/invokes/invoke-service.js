@@ -173,7 +173,7 @@ export function createInvokeService({ invoke, policies }) {
     /**
      * @param {TauriInvokeCommand} command
      * @param {any} args
-     * @param {{ headers?: HeadersInit }} [options]
+     * @param {{ headers?: HeadersInit; compressible?: boolean }} [options]
      */
     async function invokeTransport(command, args = {}, options) {
         const invokeArgs = withTauriArgumentAliases(args);

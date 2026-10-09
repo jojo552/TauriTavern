@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWebTransport } from '../src/web/transport.js';
+import { gunzipSync } from 'node:zlib';
+import { installHostIdentity } from './helpers/host-identity.mjs';
+import { createRouteRegistry } from '../src/tauri/main/router.js';
+import { registerSettingsRoutes } from '../src/tauri/main/routes/settings-routes.js';
+import { jsonResponse } from '../src/tauri/main/http-utils.js';
 
 function harness() {
     const calls = [], errors = [], states = [], streams = [], timers = [];
@@ -164,6 +169,7 @@ test('raw byte views, headers and Rust CommandError details preserve their wire 
     await assert.rejects(h.transport.invoke('generate'), actual => assert.deepEqual(actual, error) === undefined);
     await assert.rejects(h.transport.invoke('plugin:fs|open'), /Tauri plugins/);
     await assert.rejects(h.transport.invoke('generate', {}, { headers: { 'x-tt-csrf': 'spoof' } }), /Reserved/);
+    await assert.rejects(h.transport.invoke('stage_file_chunk', new Uint8Array([1]), { headers: { 'content-encoding': 'gzip' } }), /Reserved/);
     h.reply(() => new Response('proxy error', { status: 502 }));
     await assert.rejects(h.transport.invoke('generate'), /HTTP 502/);
     h.reply(() => new Response('{', { headers: { 'content-type': 'application/json' } }));
@@ -193,4 +199,80 @@ test('invalid or skipped event data fails explicitly instead of guessing a recov
     assert.equal(stream.closed, true);
     await assert.rejects(h.transport.invoke('get_settings'), /out-of-order/);
     assert.equal(h.errors.length, 1);
+});
+
+test('session reset during request compression rejects the old frame without sending or replaying it', async t => {
+    const original = globalThis.CompressionStream;
+    const entered = Promise.withResolvers(), release = Promise.withResolvers(), drained = Promise.withResolvers();
+    t.after(() => { globalThis.CompressionStream = original; });
+    globalThis.CompressionStream = class extends TransformStream {
+        constructor() {
+            super({
+                async transform(bytes, controller) {
+                    entered.resolve();
+                    await release.promise;
+                    controller.enqueue(bytes);
+                },
+                flush() { drained.resolve(); },
+            });
+        }
+    };
+    const h = harness();
+    const stream = await h.ready();
+    const saving = h.transport.invoke('append_settings_commit_chunk', new Uint8Array(64 * 1024), {
+        compressible: true, headers: { 'session-id': 'old-commit', offset: '0' },
+    });
+    const rejected = assert.rejects(saving, /session was reset/);
+    await entered.promise;
+    await h.reset(stream);
+    await rejected;
+    release.resolve();
+    await drained.promise;
+    // Drain stream consumption and the detached preparation continuation without elapsed-time waits.
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.calls.filter(call => call.url === '/__tt/invoke').length, 0);
+    h.reply(() => Response.json(true));
+    assert.equal(await h.transport.invoke('is_ready'), true);
+});
+
+test('settings commits preserve bytes, offsets and confirmed size across HTTP gzip', async t => {
+    t.after(installHostIdentity({ platform: 'browser', kind: 'web' }));
+    const h = harness();
+    await h.ready();
+    const text = JSON.stringify({ prompt: '世界书 🍀'.repeat(18000) });
+    const frames = [];
+    let size = 0, compressedFrames = 0, finished;
+    h.reply(init => {
+        const command = init.headers.get('x-tt-command');
+        if (command) {
+            const compressed = init.headers.get('content-encoding') === 'gzip';
+            const bytes = compressed ? gunzipSync(init.body) : Buffer.from(init.body);
+            if (compressed) {
+                compressedFrames++;
+                assert.ok(init.body.byteLength < bytes.byteLength);
+            }
+            assert.equal(init.headers.get('offset'), String(size));
+            assert.equal(init.headers.get('session-id'), 'commit');
+            assert.equal(init.headers.get('x-tt-session'), 'session-1');
+            assert.equal(init.headers.get('x-tt-csrf'), 'csrf-1');
+            assert.ok(bytes.byteLength <= 64 * 1024);
+            frames.push(bytes);
+            size += bytes.byteLength;
+            return Response.json(size);
+        }
+        const request = JSON.parse(init.body);
+        if (request.command === 'begin_settings_commit') return Response.json({ sessionId: 'commit', maxFrameBytes: 64 * 1024 });
+        if (request.command === 'finish_settings_commit') {
+            finished = request.args.expectedSize;
+            return Response.json({ result: 'ok' });
+        }
+        throw new Error(request.command);
+    });
+    const router = createRouteRegistry();
+    registerSettingsRoutes(router, { invokeTransport: h.transport.invoke }, { jsonResponse });
+    const response = await router.handle({ method: 'POST', path: '/api/settings/save', body: text, init: {} });
+    assert.equal(response.status, 200);
+    assert.ok(compressedFrames > 0 && frames.length > 1);
+    assert.equal(Buffer.concat(frames).toString(), text);
+    assert.equal(finished, Buffer.byteLength(text));
 });

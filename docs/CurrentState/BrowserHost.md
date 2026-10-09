@@ -30,7 +30,7 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 二进制 invoke 使用原始字节 body，`Content-Type: application/octet-stream`，并由 `x-tt-command` / `x-tt-session` 指定命令和页面。transport 自己管理这些 header 及 `x-tt-csrf`，调用方不得覆盖。staging 与 commit chunk 的 offset 等参数仍走各自 header；浏览器明确拒绝 `chunk-encoding`，不使用 base64 字节回退。单次 invoke body 当前上限为 64 MiB，实际块大小由对应协议返回。
 
-文本 commit（设置、世界书、聊天、扩展存储 JSON）的帧是可压缩文本：浏览器端 32 KiB 以上的帧经 `CompressionStream('gzip')` 压缩，以 HTTP `Content-Encoding: gzip` 发送，`/__tt/invoke` 在命令读取 body 前解压。offset、`expectedSize` 与块大小一律按解压后的字节计；64 MiB 上限同样作用于解压后的大小，超限返回 413。只接受 gzip，其他 `Content-Encoding` 返回 415，不透传。图片、归档等 staging 上传本身已压缩，不再压缩。实测（Chromium，约 2.9 MiB 设置）：gzip 后约 0.75 MiB，压缩耗时约 90 ms，4 倍 CPU 降速下约 340 ms；在 10 Mbps 上行时省下的传输时间远大于此。
+文本 commit（设置、世界书、聊天、扩展存储 JSON）的字节拥有者通过 `compressible` 提供内容提示；共享 IPC 编码不做 HTTP 压缩，浏览器 [transport](../../src/web/transport.js) 在 invoke 生命周期内将 32 KiB 以上的帧经 `CompressionStream('gzip')` 压缩，以 HTTP `Content-Encoding: gzip` 发送，`/__tt/invoke` 在命令读取 body 前解压。offset、`expectedSize` 与块大小一律按解压后的字节计；64 MiB 上限同样作用于解压后的大小，超限返回 413。只接受 gzip，其他 `Content-Encoding` 返回 415，不透传。图片、归档等 staging 上传本身已压缩，不再压缩。实测（Chromium，约 2.9 MiB 设置）：gzip 后约 0.75 MiB，压缩耗时约 90 ms，4 倍 CPU 降速下约 340 ms；在 10 Mbps 上行时省下的传输时间远大于此。请求准备期间发生页面关闭、取消或 session reset 时立即拒绝该 invoke；压缩完成后的迟到帧不发送、不重放。m2 三轮回测中上传耗时明显降低，但手机模拟条件下整体 ready 中位数没有明显改善，不能把带宽收益等同启动速度收益。
 
 原生 WebView 的 IPC 在进程内传字节，浏览器宿主则经网络传输。设置聚合（含全部预设与世界书名，实测约 90 MiB）、聊天字节与脚本都是文本，因此 [host.rs](../../src-tauri/crates/tt-server/src/host.rs) 在静态资源、Host Resource 与 invoke 响应上统一启用响应压缩：按浏览器 `Accept-Encoding` 选择 zstd 或 gzip，等级 3（在单核宿主上实测：约 110 MiB 预设聚合经 zstd 压到约 11 MiB，CPU 不高于等级 1）；不启用 Brotli（默认等级过慢）。图片、音视频、字体、ZIP、SSE 与 Range 响应不压缩；一次性归档下载路由在压缩层之外。压缩不改变响应语义，ETag/304 等条件请求照旧由 Host Resource Service 判定。
 

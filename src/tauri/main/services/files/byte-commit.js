@@ -17,9 +17,9 @@ export async function commitBytes({ begin, frames, append, finish, abort, compre
             throw new Error('Host returned an invalid commit frame limit');
         }
         for await (const frame of frames(maxFrameBytes)) {
-            const { body, headers: encodingHeaders } = await encodeIpcByteBody(frame, { compressible });
+            const { body, headers: encodingHeaders } = encodeIpcByteBody(frame);
             const headers = { ...encodingHeaders, 'session-id': sessionId, offset: String(offset) };
-            const accepted = Number(await append(body, { headers }));
+            const accepted = Number(await append(body, { headers, compressible }));
             if (accepted !== offset + frame.byteLength) {
                 throw new Error(`Host commit returned unexpected offset ${accepted}`);
             }

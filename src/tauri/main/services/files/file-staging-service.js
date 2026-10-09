@@ -51,7 +51,7 @@ export function createFileStagingService({ safeInvoke, invoke } = {}) {
             while (offset < blob.size) {
                 const end = Math.min(offset + chunkSize, blob.size);
                 const bytes = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
-                const { body, headers } = await encodeIpcByteBody(bytes);
+                const { body, headers } = encodeIpcByteBody(bytes);
                 const nextOffset = await rawInvoke()('stage_file_chunk', body, {
                     headers: { ...headers, 'file-path': encodeURIComponent(filePath), offset: String(offset) },
                 });

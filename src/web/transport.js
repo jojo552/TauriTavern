@@ -1,6 +1,15 @@
 // Explicit browser transport for the Rust HTTP host. This is not a Tauri runtime shim.
 import { createWebResources } from './resources.js';
 
+// Avoid compression overhead for small frames. Only the byte owner marks text as compressible;
+// opaque staging uploads and extension-store blobs retain their raw representation.
+const GZIP_MIN_BYTES = 32 * 1024;
+
+async function gzip(bytes) {
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 export function createWebTransport({
     fetch = globalThis.fetch?.bind(globalThis),
     EventSource = globalThis.EventSource,
@@ -207,7 +216,7 @@ export function createWebTransport({
         if (failure) throw failure;
         const generation = epoch;
         const headers = new Headers(options.headers);
-        for (const key of ['x-tt-command', 'x-tt-session', 'x-tt-csrf', 'content-type']) {
+        for (const key of ['x-tt-command', 'x-tt-session', 'x-tt-csrf', 'content-type', 'content-encoding']) {
             if (headers.has(key)) throw new TypeError(`Reserved Web transport header: ${key}`);
         }
         headers.set('x-tt-csrf', session.csrfToken);
@@ -232,9 +241,20 @@ export function createWebTransport({
         requests.add(request);
         try {
             const value = await Promise.race([
-                fetch('/__tt/invoke', { method: 'POST', credentials: 'same-origin', headers, body, signal: controller.signal })
-                    .catch(cause => { throw new Error(`Web invoke ${command}: connection lost; outcome may be unknown, command was not retried`, { cause }); })
-                    .then(response => responseValue(response, `Web invoke ${command}`)),
+                (async () => {
+                    if (binary && options.compressible && body.byteLength >= GZIP_MIN_BYTES) {
+                        try { body = await gzip(body); }
+                        catch (cause) { throw new Error(`Web invoke ${command}: request compression failed; command was not sent`, { cause }); }
+                        headers.set('content-encoding', 'gzip');
+                    }
+                    // Preparation can yield to page exit, cancellation or session replacement.
+                    // Never send its old frame after that transition, even if compression finishes.
+                    controller.signal.throwIfAborted();
+                    if (generation !== epoch) throw new Error('Request belongs to a previous server page session');
+                    return fetch('/__tt/invoke', { method: 'POST', credentials: 'same-origin', headers, body, signal: controller.signal })
+                        .catch(cause => { throw new Error(`Web invoke ${command}: connection lost; outcome may be unknown, command was not retried`, { cause }); })
+                        .then(response => responseValue(response, `Web invoke ${command}`));
+                })(),
                 cancelled.promise,
             ]);
             if (generation !== epoch) throw new Error('Response belongs to a previous server page session');
