@@ -1,0 +1,115 @@
+name: Web server build
+
+# Builds the browser host (tt-server + frontend) on GitHub-hosted runners only.
+# The artifact is the deployable release; servers download, verify and swap it, never compile.
+
+on:
+  push:
+    branches: [feat/headless-web]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-server-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: pnpm run check
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libdbus-1-dev libwebkit2gtk-4.1-dev librsvg2-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - uses: pnpm/setup@v2
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run checks and tests
+        run: pnpm run check
+
+  build:
+    name: tt-server release (Debian bookworm)
+    needs: checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    # Production runs Debian 12 (glibc 2.36); link against the same libc.
+    container: debian:bookworm
+    env:
+      TAURITAVERN_BUILD_REVISION: ${{ github.sha }}
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config cmake clang libclang-dev xz-utils
+
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          key: bookworm-server
+
+      - uses: pnpm/setup@v2
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm run web:build
+
+      - name: Build tt-server
+        run: cargo build --locked --manifest-path src-tauri/Cargo.toml -p tt-server --profile server
+
+      - name: Package release
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha12=${GITHUB_SHA:0:12}
+          name="tt-server-linux-x64-${sha12}"
+          node scripts/package-web-server.mjs src-tauri/target/server/tt-server "release/$name"
+          echo "$GITHUB_SHA" > "release/$name/SOURCE_COMMIT"
+          (cd "release/$name" && sha256sum tt-server > RELEASE_SHA256SUMS)
+          tar -C release -czf "release/$name.tar.gz" "$name"
+          (cd release && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          ldd "release/$name/tt-server"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            release/${{ steps.package.outputs.name }}.tar.gz
+            release/${{ steps.package.outputs.name }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30

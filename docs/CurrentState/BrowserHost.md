@@ -90,3 +90,9 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 | Tauri plugin / shell 能力 | 不模拟 Tauri runtime，不支持 `plugin:*` invoke；原生数据目录选择、系统分享、托盘与原生窗口控制不能视为浏览器能力。 |
 
 不可用或拼错的 HTTP command 明确返回错误，不静默降级为成功。后续接入能力应复用共享服务，并保留真实宿主差异；测试结果应注明验证范围，不能由 command 已接线推导全平台通过。
+
+## 6. 构建与发布产物
+
+浏览器宿主只在 GitHub 托管 runner 上构建：[web-server-build.yml](../../.github/workflows/web-server-build.yml) 先运行完整 `pnpm run check`，再在 Debian bookworm 容器内（与 glibc 2.36 的部署机一致）执行 `pnpm run web:build` 与 `cargo build --locked -p tt-server --profile server`，由 [package-web-server.mjs](../../scripts/package-web-server.mjs) 组装发布目录。打包脚本从 rspack 配置推导全部前端产物，连同二进制在删除旧输出前逐一检查，缺任何一项即失败。
+
+产物是 `tt-server-linux-x64-<sha12>.tar.gz` 及其 SHA-256；包内含 `SOURCE_COMMIT` 与二进制校验和。部署机只用 `gh run download` 取得产物、校验后原子替换发布目录并保留上一版本，不安装编译工具链，也不接触 CI。工作流只有 `contents: read` 权限，不持有部署凭据或用户数据。

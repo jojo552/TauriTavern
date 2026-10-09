@@ -7,6 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { createRspackConfigs } from '../rspack.config.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [binary, output] = process.argv.slice(2);
@@ -15,14 +16,23 @@ if (!binary || !output) {
     process.exit(2);
 }
 
+// Every bundle the frontend build owns, derived from the build itself rather than a second list.
+// Check them all before touching the output: a partial build must not become a release.
+const bundles = createRspackConfigs('production').flatMap(config =>
+    Object.keys(config.entry).map(name =>
+        path.join(config.output.path, config.output.filename.replace('[name]', name))));
+const missing = [];
+for (const required of [path.resolve(binary), ...bundles]) {
+    await fs.access(required).catch(() => missing.push(path.relative(repoRoot, required)));
+}
+if (missing.length) {
+    throw new Error(`Build outputs are missing; run \`pnpm run web:build\` and the tt-server build first:\n  ${missing.join('\n  ')}`);
+}
+
 const out = path.resolve(output);
+const src = path.join(repoRoot, 'src');
 await fs.rm(out, { recursive: true, force: true });
 await fs.mkdir(path.join(out, 'resources', 'frontend-extensions'), { recursive: true });
-
-const src = path.join(repoRoot, 'src');
-await fs.access(path.join(src, 'dist')).catch(() => {
-    throw new Error('src/dist is missing; run `pnpm run web:build` first');
-});
 await fs.cp(src, path.join(out, 'web'), { recursive: true });
 await fs.cp(path.join(repoRoot, 'default'), path.join(out, 'resources', 'default'), { recursive: true });
 await fs.cp(path.join(src, 'scripts', 'templates'), path.join(out, 'resources', 'frontend-templates'), { recursive: true });
