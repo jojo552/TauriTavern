@@ -3,8 +3,9 @@ import { encodeIpcByteBody } from './ipc-byte-body.js';
 /**
  * Own a bounded byte commit from begin through finish/abort.
  * Callers capture their immutable snapshot before entering this asynchronous boundary.
+ * `compressible` marks text frames that a network transport may compress; offsets stay in frame bytes.
  */
-export async function commitBytes({ begin, frames, append, finish, abort }) {
+export async function commitBytes({ begin, frames, append, finish, abort, compressible = false }) {
     const session = await begin();
     const sessionId = String(session?.sessionId || '').trim();
     if (!sessionId) throw new Error('Host did not return a commit session id');
@@ -16,7 +17,7 @@ export async function commitBytes({ begin, frames, append, finish, abort }) {
             throw new Error('Host returned an invalid commit frame limit');
         }
         for await (const frame of frames(maxFrameBytes)) {
-            const { body, headers: encodingHeaders } = encodeIpcByteBody(frame);
+            const { body, headers: encodingHeaders } = await encodeIpcByteBody(frame, { compressible });
             const headers = { ...encodingHeaders, 'session-id': sessionId, offset: String(offset) };
             const accepted = Number(await append(body, { headers }));
             if (accepted !== offset + frame.byteLength) {

@@ -1,4 +1,5 @@
 import { installHostIdentity } from './helpers/host-identity.mjs';
+import { gunzipSync } from 'node:zlib';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { jsonResponse } from '../src/tauri/main/http-utils.js';
@@ -42,4 +43,36 @@ test('settings saves preserve the text and pass only an explicit revision to the
         });
         assert.equal(invalid.status, 400);
     }
+});
+
+test('browser settings saves gzip text frames while offsets and the final size stay in decoded bytes', async t => {
+    t.after(installHostIdentity({ platform: 'browser', kind: 'web' }));
+    const router = createRouteRegistry();
+    const text = JSON.stringify({ presets: Array.from({ length: 4000 }, (_, i) => ({ name: `预设 ${i}`, prompt: 'x'.repeat(40) })) });
+    const decoded = [];
+    let finished;
+    registerSettingsRoutes(router, {
+        invokeTransport: async (command, args, options) => {
+            switch (command) {
+                case 'begin_settings_commit': return { sessionId: 'session', maxFrameBytes: 64 * 1024 };
+                case 'append_settings_commit_chunk': {
+                    assert.equal(options.headers['content-encoding'], 'gzip');
+                    const frame = gunzipSync(args);
+                    assert.ok(frame.byteLength <= 64 * 1024 && args.byteLength < frame.byteLength);
+                    assert.equal(Number(options.headers.offset), Buffer.concat(decoded).byteLength);
+                    decoded.push(frame);
+                    return Buffer.concat(decoded).byteLength;
+                }
+                case 'finish_settings_commit':
+                    finished = args.expectedSize;
+                    return { result: 'ok' };
+                default: throw new Error(command);
+            }
+        },
+    }, { jsonResponse });
+    const response = await router.handle({ method: 'POST', path: '/api/settings/save', body: text, init: {} });
+    assert.equal(response.status, 200);
+    assert.ok(decoded.length > 1);
+    assert.equal(Buffer.concat(decoded).toString(), text);
+    assert.equal(finished, Buffer.byteLength(text));
 });

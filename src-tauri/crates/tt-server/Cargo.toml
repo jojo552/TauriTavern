@@ -21,7 +21,7 @@ thiserror = { workspace = true }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["compression-gzip", "compression-zstd", "fs", "set-header"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-zstd", "decompression-gzip", "fs", "set-header"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { workspace = true }
@@ -39,4 +39,5 @@ tt-adapter-storage-core = { path = "../tt-adapter-storage-core" }
 tt-adapter-workspace-shell = { path = "../tt-adapter-workspace-shell" }
 
 [dev-dependencies]
+flate2 = "1.1.9"
 tower = { version = "0.5", features = ["util"] }

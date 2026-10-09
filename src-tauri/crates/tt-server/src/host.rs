@@ -24,6 +24,7 @@ use tower::ServiceExt;
 use tower_http::CompressionLevel;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
+use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::services::ServeDir;
 use tt_application::dto::agent_dto::{AgentRunLiveUpdateDto, AgentSubscribeRunLiveProjectionDto};
 use tt_application::dto::bootstrap_dto::BootstrapMetadataDto;
@@ -53,7 +54,8 @@ use crate::files::HostFiles;
 use crate::resources::{ResourceReply, SessionResources};
 use crate::security::{Security, Session, StreamClaim, StreamGuard};
 
-/// Raw invoke bodies are bounded by the largest native frame (4 MiB) plus headroom.
+/// Raw invoke bodies are bounded by the largest native frame (4 MiB) plus headroom. The limit
+/// applies to decoded bytes, so a gzip request body cannot expand past it.
 const MAX_INVOKE_BODY_BYTES: usize = 64 * 1024 * 1024;
 const SILLYTAVERN_COMPAT_VERSION: &str = "1.19.0";
 /// The page loads once; the browser must ask again after a deployment rather than mix builds.
@@ -95,7 +97,7 @@ pub fn router(host: Arc<Host>) -> Router {
         .route("/__tt/session", get(create_session))
         .route("/__tt/session/close", post(close_page))
         .route("/__tt/events", get(events))
-        .route("/__tt/invoke", post(invoke))
+        .route("/__tt/invoke", post(invoke).layer(invoke_decompression()))
         .fallback(static_or_resource)
         .layer(compression())
         // Archives are already compressed and may be large; keep them out of the compression layer.
@@ -121,6 +123,16 @@ fn compression() -> CompressionLayer<impl Predicate> {
         .no_deflate()
         .quality(CompressionLevel::Precise(3))
         .compress_when(predicate)
+}
+
+/// Text commit frames cross the same network in the other direction. The browser gzips them
+/// (`CompressionStream`) and this layer decodes before the command reads its body, so offsets and
+/// sizes stay in decoded bytes. Other encodings are refused with 415 rather than passed through.
+fn invoke_decompression() -> RequestDecompressionLayer {
+    RequestDecompressionLayer::new()
+        .no_br()
+        .no_deflate()
+        .no_zstd()
 }
 
 async fn authenticate(State(host): State<Arc<Host>>, request: Request, next: Next) -> Response {
@@ -733,6 +745,42 @@ pub fn inject_host_identity(index_html: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn gzip_invoke_bodies_are_decoded_and_bounded_by_decoded_size() {
+        use std::io::Write;
+        let app = Router::new()
+            .route(
+                "/",
+                post(|body: Bytes| async move { body.len().to_string() })
+                    .layer(invoke_decompression()),
+            )
+            .layer(axum::extract::DefaultBodyLimit::max(1024));
+        let gzip = |bytes: &[u8]| {
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(bytes).unwrap();
+            encoder.finish().unwrap()
+        };
+        let send = |encoding: &'static str, body: Vec<u8>| {
+            app.clone().oneshot(
+                Request::post("/")
+                    .header(header::CONTENT_ENCODING, encoding)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+        };
+
+        let response = send("gzip", gzip(&[b'a'; 1000])).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 64).await.unwrap();
+        assert_eq!(&body[..], b"1000");
+        // A small compressed body that expands past the limit fails instead of being buffered.
+        let response = send("gzip", gzip(&[b'a'; 1025])).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let response = send("br", vec![0]).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
 
     #[test]
     fn native_and_explicit_event_reconnect_share_one_cursor_and_reject_conflicts() {

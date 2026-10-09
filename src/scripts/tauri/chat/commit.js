@@ -73,5 +73,6 @@ async function commitChatRecords({ target, operation, records, commitReason }) {
             commitReason,
         }),
         abort: sessionId => invokeChatCommit('abort_chat_commit', { sessionId }),
+        compressible: true,
     });
 }

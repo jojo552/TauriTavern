@@ -50,6 +50,7 @@ export function registerWorldInfoRoutes(router, context, { jsonResponse }) {
                 expectedSize,
             }),
             abort: sessionId => context.invokeTransport('abort_world_info_commit', { sessionId }),
+            compressible: true,
         });
         return jsonResponse({ ok: true });
     }, { body: 'text' });

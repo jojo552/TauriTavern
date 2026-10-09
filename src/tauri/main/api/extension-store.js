@@ -63,7 +63,7 @@ function createExtensionStoreApi({ safeInvoke, invokeTransport }) {
         return { stream: createByteStream(opened.readerId), mimeType: opened.mimeType };
     }
 
-    function commit(entry, operation, frames) {
+    function commit(entry, operation, frames, { compressible = false } = {}) {
         return commitBytes({
             begin: () => invokeTransport('begin_extension_store_commit', { ...entry, operation }),
             frames,
@@ -75,6 +75,7 @@ function createExtensionStoreApi({ safeInvoke, invokeTransport }) {
                 expectedSize,
             }),
             abort: sessionId => invokeTransport('abort_extension_store_commit', { sessionId }),
+            compressible,
         });
     }
 
@@ -104,7 +105,7 @@ function createExtensionStoreApi({ safeInvoke, invokeTransport }) {
         // Capture before begin() yields: later caller edits belong to a later commit.
         const text = JSON.stringify(options?.value);
         if (typeof text !== 'string') throw new Error('Extension store value is not JSON serializable');
-        return commit(entry, operation, maxBytes => textFragmentsToByteChunks([text], maxBytes));
+        return commit(entry, operation, maxBytes => textFragmentsToByteChunks([text], maxBytes), { compressible: true });
     }
 
     async function setJson(options) {

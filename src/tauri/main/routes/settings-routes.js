@@ -57,6 +57,7 @@ export function registerSettingsRoutes(router, context, { jsonResponse }) {
                 expectedSize,
             }),
             abort: sessionId => context.invokeTransport('abort_settings_commit', { sessionId }),
+            compressible: true,
         });
         return jsonResponse(result);
     }, { body: 'text' });
