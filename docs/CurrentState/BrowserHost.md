@@ -93,6 +93,6 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 ## 6. 构建与发布产物
 
-浏览器宿主只在 GitHub 托管 runner 上构建：[web-server-build.yml](../../.github/workflows/web-server-build.yml) 先运行完整 `pnpm run check`，再在 Debian bookworm 容器内（与 glibc 2.36 的部署机一致）执行 `pnpm run web:build` 与 `cargo build --locked -p tt-server --profile server`，由 [package-web-server.mjs](../../scripts/package-web-server.mjs) 组装发布目录。打包脚本从 rspack 配置推导全部前端产物，连同二进制在删除旧输出前逐一检查，缺任何一项即失败。
+浏览器宿主只在 GitHub 托管 runner 上构建：[web-server-build.yml](../../.github/workflows/web-server-build.yml) 并行运行完整 `pnpm run check` 与 Debian bookworm 容器内（与 glibc 2.36 的部署机一致）的构建，后者执行 `pnpm run web:build` 与 `cargo build --locked -p tt-server --profile server`，由 [package-web-server.mjs](../../scripts/package-web-server.mjs) 组装发布目录。打包脚本从 rspack 配置推导全部前端产物，连同二进制在删除旧输出前逐一检查，缺任何一项即失败。
 
-产物是 `tt-server-linux-x64-<sha12>.tar.gz` 及其 SHA-256；包内含 `SOURCE_COMMIT` 与二进制校验和。部署机只用 `gh run download` 取得产物、校验后原子替换发布目录并保留上一版本，不安装编译工具链，也不接触 CI。工作流只有 `contents: read` 权限，不持有部署凭据或用户数据。
+构建任务的输出带 `unverified-` 前缀、只保留 1 天；检查与构建都成功后，发布任务校验并重新上传为 `tt-server-linux-x64-<sha12>.tar.gz` 及其 SHA-256，只有这个名字的产物可以部署。仅改动文档或 Markdown 的推送不触发构建。包内含 `SOURCE_COMMIT` 与二进制校验和。部署机只用 `gh run download` 取得产物、校验后原子替换发布目录并保留上一版本，不安装编译工具链，也不接触 CI。工作流只有 `contents: read` 权限，不持有部署凭据或用户数据。

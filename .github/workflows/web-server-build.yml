@@ -1,11 +1,15 @@
 name: Web server build
 
 # Builds the browser host (tt-server + frontend) on GitHub-hosted runners only.
-# The artifact is the deployable release; servers download, verify and swap it, never compile.
+# Checks and the release build run in parallel; only the release job, which needs both, publishes
+# the deployable artifact. Servers download, verify and swap it, never compile.
 
 on:
   push:
     branches: [feat/headless-web]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:
@@ -52,14 +56,15 @@ jobs:
         run: pnpm run check
 
   build:
-    name: tt-server release (Debian bookworm)
-    needs: checks
+    name: tt-server build (Debian bookworm)
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     # Production runs Debian 12 (glibc 2.36); link against the same libc.
     container: debian:bookworm
     env:
       TAURITAVERN_BUILD_REVISION: ${{ github.sha }}
+    outputs:
+      name: ${{ steps.package.outputs.name }}
     steps:
       - name: Install build tools
         run: |
@@ -105,11 +110,34 @@ jobs:
           ldd "release/$name/tt-server"
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
+      # Built in parallel with the checks, so not yet a release: kept briefly for the release job only.
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.package.outputs.name }}
+          name: unverified-${{ steps.package.outputs.name }}
           path: |
             release/${{ steps.package.outputs.name }}.tar.gz
             release/${{ steps.package.outputs.name }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish release artifact
+    needs: [checks, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: unverified-${{ needs.build.outputs.name }}
+          path: release
+
+      - name: Verify checksum
+        working-directory: release
+        run: sha256sum -c "${{ needs.build.outputs.name }}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ needs.build.outputs.name }}
+          path: release/*
           if-no-files-found: error
           retention-days: 30
