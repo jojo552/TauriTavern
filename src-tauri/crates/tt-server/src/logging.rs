@@ -118,7 +118,9 @@ mod tests {
             .backend
             .set(
                 true,
-                || panic!("enabling again must keep the receiver"),
+                || -> broadcast::Receiver<Value> {
+                    panic!("enabling again must keep the receiver")
+                },
                 a.clone(),
                 "tauritavern-backend-log",
             )
