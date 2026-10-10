@@ -14,8 +14,6 @@ export type SettingsTranslate = (key: string) => string;
 export type SettingsCapabilities = {
     requestProxyAllowed: boolean;
     lanSyncAllowed: boolean;
-    supportsBackendLogs: boolean;
-    supportsLlmApiLogs: boolean;
     supportsCloseToTrayOnClose: boolean;
     supportsDataRootSelection: boolean;
 };
@@ -248,8 +246,6 @@ export function validateSettingsBoundary(
     for (const name of [
         'requestProxyAllowed',
         'lanSyncAllowed',
-        'supportsBackendLogs',
-        'supportsLlmApiLogs',
         'supportsCloseToTrayOnClose',
         'supportsDataRootSelection',
     ]) {

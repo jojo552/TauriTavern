@@ -15,6 +15,7 @@ import { isGitHubRateLimitMessage } from '../../util/github-rate-limit.js';
 import { githubRateLimitStopper } from '../../util/github-rate-limit-stopper.js';
 import { extractErrorText, toUserFacingErrorText } from '../../util/user-facing-error.js';
 import { getActiveIosPolicyCapabilities } from '../../tauritavern/ios-policy.js';
+import { isWebHost } from '../../util/host-identity.js';
 
 const MODULE_NAME = 'tauritavern-version';
 const LINKS = Object.freeze({
@@ -590,7 +591,10 @@ jQuery(async () => {
 
     const html = await renderExtensionTemplateAsync(MODULE_NAME, 'settings', LINKS);
     container.append(html);
-    $('#tauritavern_export_debug_bundle').on('click', () => void onExportDebugBundleClick());
+    // The browser host has no debug bundle; its log panels read the same data directly.
+    $('#tauritavern_export_debug_bundle')
+        .prop('hidden', isWebHost())
+        .on('click', () => void onExportDebugBundleClick());
 
     const aboutCaps = resolveIosAboutCapabilities();
     if (aboutCaps && aboutCaps.git_info === false) {

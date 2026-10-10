@@ -36,9 +36,12 @@ user-error layer 将消息交给 `app/backend_errors.rs::BackendErrorHub`。前�
 
 ## 4. Dev Observability
 
-Dev Observability 通过 `app/dev_observability.rs::DevObservabilityHub` 暴露给 presentation commands。`dev_logging_commands.rs` 和 `settings_commands.rs` 不直接接触 `infrastructure::logging::*` store。
+后端日志缓冲（`devtools::BackendLogStore` 及其 tracing layer）、LLM API 日志存储（`llm_api_logs::LlmApiLogStore`）与请求记录装饰器（`LoggingChatCompletionRepository`）位于 Tauri-free 的 `tt-adapter-observability`，原生与浏览器宿主共用同一实现。store 只负责保存与广播新条目，不持有“是否推送”的全局开关；每个宿主决定交付方式：
 
-LLM API logs 仍由 infrastructure decorator `LoggingChatCompletionRepository` 记录 raw/readable 请求响应。JSON 请求及非流式 JSON 响应写入前会移除内部 provider state，并把 data URL、Claude base64 source、Gemini inline data 中的媒体内容替换为只含 MIME 与编码长度的占位符；脱敏只作用于日志副本，不修改出站 payload。持久化失败是诊断日志，不触发 backend error toast。
+- 原生：`app/dev_observability.rs::DevObservabilityHub` 暴露给 presentation commands，前端启用流时订阅广播并以 Tauri 事件 `tauritavern-backend-log` / `tauritavern-llm-api-log` 推送，落后于广播容量时记录 warn（面板仍可用 tail/index 补看）；`dev_logging_commands.rs` 和 `settings_commands.rs` 不直接接触 store。
+- 浏览器：`tt-server` 在页面声明启用时为该页订阅广播，经页面 SSE 推送同名事件；页面关闭或停用即取消。见 [BrowserHost](BrowserHost.md)。
+
+LLM API logs 由 `LoggingChatCompletionRepository` 记录 raw/readable 请求响应。JSON 请求及非流式 JSON 响应写入前会移除内部 provider state，并把 data URL、Claude base64 source、Gemini inline data 中的媒体内容替换为只含 MIME 与编码长度的占位符；脱敏只作用于日志副本，不修改出站 payload。持久化失败是诊断日志，不触发 backend error toast。
 
 ## 5. 持续开发守卫
 

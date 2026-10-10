@@ -1,15 +1,17 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::TimeZone;
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, async_runtime::JoinHandle};
+use tokio::sync::broadcast;
+use tt_adapter_observability::devtools::{BACKEND_LOG_EVENT, BackendLogEntry, BackendLogStore};
+use tt_adapter_observability::llm_api_logs::{
+    LLM_API_LOG_EVENT, LlmApiLogEntryPreview, LlmApiLogEntryRaw, LlmApiLogIndexEntry,
+    LlmApiLogStore, LlmApiRawKind,
+};
 
 use crate::infrastructure::logging::dev_bundle::{DevLogBundleInput, export_dev_log_bundle};
-use crate::infrastructure::logging::devtools::{BackendLogEntry, BackendLogStore};
-use crate::infrastructure::logging::llm_api_logs::{
-    LlmApiLogEntryPreview, LlmApiLogEntryRaw, LlmApiLogIndexEntry, LlmApiLogStore, LlmApiRawKind,
-};
 use crate::infrastructure::paths::RuntimePaths;
 use crate::infrastructure::staging;
 use tt_application::dto::dev_observability_dto::{
@@ -23,6 +25,53 @@ pub struct DevObservabilityHub {
     runtime_paths: RuntimePaths,
     backend_logs: Arc<BackendLogStore>,
     llm_api_logs: Arc<LlmApiLogStore>,
+    backend_stream: WindowEventForward,
+    llm_api_stream: WindowEventForward,
+}
+
+/// Forwards one store broadcast to the window as a Tauri event while the frontend keeps the
+/// stream enabled. The frontend reference-counts its subscribers and toggles this once.
+#[derive(Default)]
+struct WindowEventForward(Mutex<Option<JoinHandle<()>>>);
+
+impl WindowEventForward {
+    fn set<T>(
+        &self,
+        enabled: bool,
+        app_handle: &AppHandle,
+        event: &'static str,
+        subscribe: impl FnOnce() -> broadcast::Receiver<T>,
+    ) where
+        T: Clone + Serialize + Send + 'static,
+    {
+        let mut forward = self.0.lock().expect("window event forward poisoned");
+        if enabled == forward.is_some() {
+            return;
+        }
+        if let Some(task) = forward.take() {
+            task.abort();
+            return;
+        }
+
+        let mut receiver = subscribe();
+        let app_handle = app_handle.clone();
+        *forward = Some(tauri::async_runtime::spawn(async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(entry) => {
+                        let _ = app_handle.emit(event, entry);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        // Visible in the panel itself; tail/index still hold the skipped entries.
+                        tracing::warn!(
+                            "{event} stream skipped {skipped} entries; reopen the panel to resync"
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        }));
+    }
 }
 
 impl DevObservabilityHub {
@@ -37,11 +86,14 @@ impl DevObservabilityHub {
             runtime_paths,
             backend_logs,
             llm_api_logs,
+            backend_stream: WindowEventForward::default(),
+            llm_api_stream: WindowEventForward::default(),
         }
     }
 
     pub fn set_backend_stream_enabled(&self, enabled: bool) {
-        self.backend_logs.set_stream_enabled(enabled);
+        let logs = &self.backend_logs;
+        self.backend_stream.set(enabled, &self.app_handle, BACKEND_LOG_EVENT, || logs.subscribe());
     }
 
     pub fn tail_backend_logs(&self, limit: usize) -> Vec<BackendLogEntryDto> {
@@ -53,7 +105,8 @@ impl DevObservabilityHub {
     }
 
     pub fn set_llm_api_stream_enabled(&self, enabled: bool) {
-        self.llm_api_logs.set_stream_enabled(enabled);
+        let logs = &self.llm_api_logs;
+        self.llm_api_stream.set(enabled, &self.app_handle, LLM_API_LOG_EVENT, || logs.subscribe());
     }
 
     pub fn apply_llm_api_log_retention(&self, keep: u32) {

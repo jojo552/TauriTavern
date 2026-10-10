@@ -61,9 +61,8 @@ test('menu rendering and its manager use host capabilities while preserving unav
             try {
                 api.setExtensionMenuShortcutIds(allIds);
                 await api.renderExtensionMenuShortcuts();
-                const expected = host.platform === 'browser'
-                    ? ['frontend-logs', 'reload-frontend']
-                    : host.platform === 'ios' ? allIds.slice(1) : allIds;
+                // Only sync depends on the host: log panels are available everywhere.
+                const expected = host.platform === 'windows' ? allIds : allIds.slice(1);
                 const rendered = () => Array.from(dom.document.querySelectorAll('[role="button"]'), item => item.id);
                 assert.deepEqual(rendered(), expected.map(id => 'tauritavern_shortcut_' + id));
                 await api.openExtensionMenuShortcutsManager();

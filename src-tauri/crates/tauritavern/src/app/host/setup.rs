@@ -7,10 +7,10 @@
 use std::sync::Arc;
 
 use crate::app::{BackendReadiness, StartupProfile, spawn_initialization};
-use crate::infrastructure::logging::llm_api_logs::LlmApiLogStore;
 use tauri::Manager;
 use tt_adapter_extension::tools::AgentExtensionTools;
 use tt_adapter_http::HttpClientPool;
+use tt_adapter_observability::llm_api_logs::LlmApiLogStore;
 use tt_adapter_storage_core::commit_stage::PageGeneration;
 use tt_domain::errors::DomainError;
 use tt_domain::ios_policy::IosPolicyScope;

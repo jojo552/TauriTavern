@@ -35,6 +35,7 @@ tt-adapter-http = { path = "../tt-adapter-http" }
 tt-adapter-archive = { path = "../tt-adapter-archive" }
 tt-adapter-extension = { path = "../tt-adapter-extension" }
 tt-adapter-media = { path = "../tt-adapter-media" }
+tt-adapter-observability = { path = "../tt-adapter-observability" }
 tt-adapter-provider-http = { path = "../tt-adapter-provider-http" }
 tt-adapter-storage-core = { path = "../tt-adapter-storage-core" }
 tt-adapter-workspace-shell = { path = "../tt-adapter-workspace-shell" }

@@ -6,7 +6,7 @@ use super::reasoning::{
     collect_visible_reasoning_texts, collect_visible_reasoning_value, has_reasoning_native_state,
 };
 
-pub(in crate::infrastructure::logging::llm_api_logs) fn format_request_readable(
+pub(in crate::llm_api_logs) fn format_request_readable(
     source: ChatCompletionSource,
     payload: &Value,
 ) -> String {
@@ -682,7 +682,7 @@ fn append_gemini_part(out: &mut String, part: &Value) {
     append_block_json(out, part);
 }
 
-pub(in crate::infrastructure::logging::llm_api_logs) fn format_response_readable(
+pub(in crate::llm_api_logs) fn format_response_readable(
     response: &Value,
 ) -> String {
     if response.get("choices").is_some() {

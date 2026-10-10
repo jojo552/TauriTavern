@@ -1,6 +1,6 @@
 // @ts-check
 
-import { listen as tauriListen } from '../../../../tauri-bridge.js';
+import { listen as tauriListen, onHostSessionReset } from '../../../../tauri-bridge.js';
 
 /**
  * @template T
@@ -16,6 +16,10 @@ function dispatch(entry, subscribers) {
 /**
  * Reference-counted owner of one host log stream. The stream is enabled while
  * at least one subscriber is attached and disabled once the last one leaves.
+ * The listener is attached before enabling, so the first entries are not lost.
+ * Enabling is declarative host state: when a browser page session is replaced,
+ * a running stream is enabled again on the new session. Entries produced while
+ * disconnected are not replayed; `tail()` / `index()` still hold them.
  *
  * @template T
  * @param {{
@@ -23,9 +27,16 @@ function dispatch(entry, subscribers) {
  *   enableCommand: any;
  *   eventName: string;
  *   listen?: (eventName: string, handler: (event: { payload: T }) => void) => Promise<() => void>;
+ *   sessionReset?: (handler: () => Promise<void>) => () => void;
  * }} deps
  */
-export function createTauriEventStreamBridge({ safeInvoke, enableCommand, eventName, listen = tauriListen }) {
+export function createTauriEventStreamBridge({
+    safeInvoke,
+    enableCommand,
+    eventName,
+    listen = tauriListen,
+    sessionReset = onHostSessionReset,
+}) {
     /** @type {Set<(entry: T) => void>} */
     const subscribers = new Set();
     /** @type {(() => void) | null} */
@@ -34,6 +45,14 @@ export function createTauriEventStreamBridge({ safeInvoke, enableCommand, eventN
     let starting = null;
     /** @type {Promise<void> | null} */
     let stopping = null;
+
+    // A start or stop in flight settles against the new session by itself; only a running
+    // stream needs to be declared again. A failure surfaces through the reset reporter.
+    sessionReset(async () => {
+        if (unlisten && !starting && !stopping) {
+            await safeInvoke(enableCommand, { enabled: true });
+        }
+    });
 
     async function ensureStarted() {
         if (unlisten) {
@@ -57,15 +76,16 @@ export function createTauriEventStreamBridge({ safeInvoke, enableCommand, eventN
                     // See above: the stream is re-enabled right after.
                 }
             }
-            await safeInvoke(enableCommand, { enabled: true });
+            const stopListening = await listen(eventName, /** @param {{ payload: T }} event */ (event) => {
+                dispatch(/** @type {T} */ (event.payload), subscribers);
+            });
             try {
-                unlisten = await listen(eventName, /** @param {{ payload: T }} event */ (event) => {
-                    dispatch(/** @type {T} */ (event.payload), subscribers);
-                });
+                await safeInvoke(enableCommand, { enabled: true });
             } catch (error) {
-                await safeInvoke(enableCommand, { enabled: false });
+                stopListening();
                 throw error;
             }
+            unlisten = stopListening;
         })();
 
         try {

@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use tauri::{AppHandle, Emitter};
+use tokio::runtime::Handle;
+use tokio::sync::broadcast;
 
-use super::LLM_API_LOG_EVENT;
 use super::files::{
     delete_entry_files, index_path, load_meta, meta_path, persist_index_file, persist_meta_file,
     persist_raw_files, request_raw_path, response_raw_json_path, response_raw_sse_path,
@@ -15,18 +15,22 @@ use super::types::{
 };
 
 const DEFAULT_KEEP: usize = 5;
+/// Live subscribers that fall this far behind observe `Lagged` instead of silently missing entries.
+const INDEX_BROADCAST_CAPACITY: usize = 256;
 
+/// Persisted LLM API request logs plus a broadcast of new index entries. File writes run on the
+/// runtime the host supplies; delivery of live entries is the host's concern.
 pub struct LlmApiLogStore {
-    app_handle: AppHandle,
+    runtime: Handle,
     log_root: PathBuf,
     next_id: AtomicU64,
-    stream_enabled: AtomicBool,
     keep: AtomicU64,
     index: Mutex<VecDeque<LlmApiLogIndexEntry>>,
+    updates: broadcast::Sender<LlmApiLogIndexEntry>,
 }
 
 impl LlmApiLogStore {
-    pub fn new(app_handle: AppHandle, log_root: PathBuf) -> Self {
+    pub fn new(runtime: Handle, log_root: PathBuf) -> Self {
         let mut index = VecDeque::new();
         let mut next_id = 1_u64;
 
@@ -40,21 +44,26 @@ impl LlmApiLogStore {
         }
 
         Self {
-            app_handle,
+            runtime,
             log_root,
             next_id: AtomicU64::new(next_id),
-            stream_enabled: AtomicBool::new(false),
             keep: AtomicU64::new(DEFAULT_KEEP as u64),
             index: Mutex::new(index),
+            updates: broadcast::channel(INDEX_BROADCAST_CAPACITY).0,
         }
+    }
+
+    /// Index entries recorded after this call; earlier ones are read with `tail_index`.
+    pub fn subscribe(&self) -> broadcast::Receiver<LlmApiLogIndexEntry> {
+        self.updates.subscribe()
+    }
+
+    pub(super) fn runtime(&self) -> &Handle {
+        &self.runtime
     }
 
     pub(super) fn log_root(&self) -> &Path {
         &self.log_root
-    }
-
-    pub fn set_stream_enabled(&self, enabled: bool) {
-        self.stream_enabled.store(enabled, Ordering::Relaxed);
     }
 
     pub fn apply_settings(&self, keep: u32) {
@@ -67,7 +76,7 @@ impl LlmApiLogStore {
             index.iter().cloned().collect::<Vec<_>>()
         };
         let log_root = self.log_root.clone();
-        tauri::async_runtime::spawn(async move {
+        self.runtime.spawn(async move {
             if let Err(error) = persist_index_file(&log_root, &index_snapshot).await {
                 tracing::error!("Failed to persist LLM API log index: {}", error);
             }
@@ -128,7 +137,6 @@ impl LlmApiLogStore {
 
         let index_entry = LlmApiLogIndexEntry::from(&meta);
         let keep = self.keep.load(Ordering::Relaxed) as usize;
-        let should_stream = self.stream_enabled.load(Ordering::Relaxed);
 
         let (removed_ids, index_snapshot) = {
             let mut index = self.index.lock().unwrap();
@@ -142,12 +150,11 @@ impl LlmApiLogStore {
             (removed, index.iter().cloned().collect::<Vec<_>>())
         };
 
-        if should_stream {
-            let _ = self.app_handle.emit(LLM_API_LOG_EVENT, index_entry);
-        }
+        // No receiver simply means nobody is watching live; the entry is already indexed.
+        let _ = self.updates.send(index_entry);
 
         let log_root = self.log_root.clone();
-        tauri::async_runtime::spawn(async move {
+        self.runtime.spawn(async move {
             if let Err(error) = persist_raw_files(
                 &log_root,
                 meta.id,
@@ -198,7 +205,7 @@ impl LlmApiLogStore {
         }
 
         let log_root = self.log_root.clone();
-        tauri::async_runtime::spawn(async move {
+        self.runtime.spawn(async move {
             for removed_id in removed_ids {
                 let _ = delete_entry_files(&log_root, removed_id).await;
             }

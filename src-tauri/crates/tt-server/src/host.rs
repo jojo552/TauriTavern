@@ -27,6 +27,8 @@ use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Pr
 use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::services::ServeDir;
 use tt_adapter_extension::tools::AgentExtensionTools;
+use tt_adapter_observability::devtools::{BACKEND_LOG_EVENT, BackendLogStore};
+use tt_adapter_observability::llm_api_logs::{LLM_API_LOG_EVENT, LlmApiLogStore};
 use tt_application::dto::agent_dto::{AgentRunLiveUpdateDto, AgentSubscribeRunLiveProjectionDto};
 use tt_application::dto::settings_dto::UpdateTauriTavernSettingsDto;
 use tt_application::services::agent_runtime_service::AgentRunLivePresenter;
@@ -50,6 +52,7 @@ use crate::ai::AiSession;
 use crate::error::CommandError;
 use crate::events::{PageBus, PageChannel, PageStream, ResumeError};
 use crate::files::HostFiles;
+use crate::logging::PageLogStreams;
 use crate::resources::{ResourceReply, SessionResources};
 use crate::security::{Security, Session, StreamClaim, StreamGuard};
 
@@ -74,6 +77,8 @@ pub struct Host {
     pub updates: Arc<tt_application::services::update_service::UpdateService>,
     pub downloads: crate::downloads::Downloads,
     pub archives: Arc<tt_application::services::data_archive_service::DataArchiveService>,
+    pub backend_logs: Arc<BackendLogStore>,
+    pub llm_api_logs: Arc<LlmApiLogStore>,
 }
 
 /// A page channel is how the browser host delivers extension tool events to a page.
@@ -89,6 +94,8 @@ pub struct PageState {
     pub resources: SessionResources,
     pub ai: AiSession,
     pub bus: Arc<PageBus>,
+    /// Live log delivery this page asked for; collection itself is host-wide.
+    pub logs: PageLogStreams,
 }
 
 pub fn router(host: Arc<Host>) -> Router {
@@ -464,6 +471,14 @@ fn arg<T: serde::de::DeserializeOwned>(args: &Value, name: &str) -> Result<T, Co
         .map_err(|error| CommandError::BadRequest(format!("Invalid argument {name}: {error}")))
 }
 
+/// A missing entry was evicted by retention; anything else is a storage fault with its context.
+fn llm_log_error(id: u64, error: std::io::Error) -> CommandError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        return CommandError::NotFound(format!("LLM API log {id} is no longer retained"));
+    }
+    CommandError::InternalServerError(format!("Failed to read LLM API log {id}: {error}"))
+}
+
 fn to_json(value: impl serde::Serialize) -> Result<Option<Value>, CommandError> {
     serde_json::to_value(value)
         .map(Some)
@@ -508,6 +523,38 @@ async fn page_command(
             let dto: AgentSubscribeRunLiveProjectionDto = arg(args, "dto")?;
             let channel = session.page.bus.channel(args, "channel")?;
             stream_live_projection(host, &dto.run_id, &channel).await?;
+            to_json(())
+        }
+        // Same commands as the native host. Enabling is per page and idempotent; entries go to
+        // this page's event stream only and stop with the page.
+        "devlog_set_backend_log_stream_enabled" => {
+            let logs = host.backend_logs.clone();
+            session
+                .page
+                .logs
+                .backend
+                .set(
+                    arg(args, "enabled")?,
+                    move || logs.subscribe(),
+                    session.page.bus.clone(),
+                    BACKEND_LOG_EVENT,
+                )
+                .await;
+            to_json(())
+        }
+        "devlog_set_llm_api_log_stream_enabled" => {
+            let logs = host.llm_api_logs.clone();
+            session
+                .page
+                .logs
+                .llm
+                .set(
+                    arg(args, "enabled")?,
+                    move || logs.subscribe(),
+                    session.page.bus.clone(),
+                    LLM_API_LOG_EVENT,
+                )
+                .await;
             to_json(())
         }
         _ => Ok(None),
@@ -567,6 +614,32 @@ async fn host_command(
         "backend_error_bridge_ready" => to_json(Vec::<String>::new()),
         // Page console output is mirrored into the server log, as the native host mirrors it into
         // its backend log; this is the only place a browser page's errors become operator-visible.
+        "devlog_get_backend_log_tail" => {
+            let limit: Option<u32> = arg(args, "limit")?;
+            to_json(host.backend_logs.tail(limit.unwrap_or(800) as usize))
+        }
+        "devlog_get_llm_api_log_index" => {
+            let limit: Option<u32> = arg(args, "limit")?;
+            to_json(host.llm_api_logs.tail_index(limit.unwrap_or(50).max(1) as usize))
+        }
+        "devlog_get_llm_api_log_preview" => {
+            let id: u64 = arg(args, "id")?;
+            let preview = host
+                .llm_api_logs
+                .get_preview(id)
+                .await
+                .map_err(|error| llm_log_error(id, error))?;
+            to_json(preview)
+        }
+        "devlog_get_llm_api_log_raw" => {
+            let id: u64 = arg(args, "id")?;
+            let raw = host
+                .llm_api_logs
+                .get_raw(id)
+                .await
+                .map_err(|error| llm_log_error(id, error))?;
+            to_json(raw)
+        }
         "devlog_append_frontend_logs" => {
             let entries: Vec<tt_application::dto::dev_observability_dto::FrontendLogEntryDto> =
                 arg(args, "entries")?;
@@ -620,6 +693,7 @@ async fn host_command(
                 .set_avatar_persona_original_images_enabled(
                     settings.avatar_persona_original_images_enabled,
                 );
+            host.llm_api_logs.apply_settings(settings.dev.llm_api_keep);
             if retention_updated {
                 services
                     .agent_run_retention_automation_service

@@ -10,7 +10,7 @@ use tracing_subscriber::{
     prelude::*,
 };
 
-use super::devtools::BackendLogStore;
+use tt_adapter_observability::devtools::BackendLogStore;
 
 pub type BackendErrorSink = Arc<dyn Fn(String) + Send + Sync + 'static>;
 

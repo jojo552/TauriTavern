@@ -8712,6 +8712,7 @@ dependencies = [
  "tt-adapter-http",
  "tt-adapter-mcp",
  "tt-adapter-media",
+ "tt-adapter-observability",
  "tt-adapter-provider-http",
  "tt-adapter-storage-core",
  "tt-adapter-storage-userdata",
@@ -9394,6 +9395,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tt-adapter-observability"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tt-domain",
+ "tt-ports",
+ "url",
+]
+
+[[package]]
 name = "tt-adapter-provider-http"
 version = "0.1.0"
 dependencies = [
@@ -9686,6 +9703,7 @@ dependencies = [
  "tt-adapter-extension",
  "tt-adapter-http",
  "tt-adapter-media",
+ "tt-adapter-observability",
  "tt-adapter-provider-http",
  "tt-adapter-storage-core",
  "tt-adapter-workspace-shell",

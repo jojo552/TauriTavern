@@ -48,6 +48,10 @@ function collectLineViolations(relPath, line, lineNumber) {
     if (relPath.startsWith('src-tauri/crates/tauritavern/src/presentation/') && stripped.includes('crate::infrastructure::logging')) {
         violations.push('presentation -> infrastructure logging');
     }
+    // Commands reach the shared stores only through DevObservabilityHub.
+    if (relPath.startsWith('src-tauri/crates/tauritavern/src/presentation/') && stripped.includes('tt_adapter_observability')) {
+        violations.push('presentation -> observability stores');
+    }
     if (relPath === 'src-tauri/crates/tauritavern/src/presentation/commands/dev_logging_commands.rs' && stripped.includes('crate::infrastructure::')) {
         violations.push('dev_logging_commands -> infrastructure');
     }

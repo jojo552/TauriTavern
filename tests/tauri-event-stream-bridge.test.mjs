@@ -23,6 +23,8 @@ async function createBridge() {
     let disableGate = null;
     /** @type {Error | null} */
     let listenFailure = null;
+    /** @type {(() => Promise<void>) | null} */
+    let resetHandler = null;
 
     const bridge = createTauriEventStreamBridge({
         safeInvoke: async (_command, args) => {
@@ -35,6 +37,10 @@ async function createBridge() {
         },
         enableCommand: 'cmd',
         eventName: 'evt',
+        sessionReset: (handler) => {
+            resetHandler = handler;
+            return () => {};
+        },
         listen: async (_eventName, handler) => {
             if (listenFailure) {
                 const error = listenFailure;
@@ -54,6 +60,7 @@ async function createBridge() {
         bridge,
         calls,
         emit: (payload) => eventHandler?.({ payload }),
+        resetSession: () => resetHandler(),
         setDisableGate: (gate) => {
             disableGate = gate;
         },
@@ -79,12 +86,10 @@ test('a rejected start removes the ghost subscriber instead of dispatching to it
 
     assert.deepEqual(ghostCalls, []);
     assert.deepEqual(liveCalls, ['entry']);
-    // The failed start ran its compensating disable; the successful start re-enabled once.
+    // The failed listen never enabled the stream; the successful start listens before enabling.
     assert.deepEqual(calls.map((call) => call.type === 'invoke' ? `invoke:${call.enabled}` : call.type), [
-        'invoke:true',
-        'invoke:false',
-        'invoke:true',
         'listen',
+        'invoke:true',
     ]);
     await dispose();
 });
@@ -156,4 +161,23 @@ test('disposers are idempotent and resolve with the in-flight stop', async () =>
 
     assert.equal(disableCalls(calls), 1);
     assert.equal(calls.filter((call) => call.type === 'unlisten').length, 1);
+});
+
+test('a replaced page session re-enables only a running stream', async () => {
+    const { bridge, calls, emit, resetSession } = await createBridge();
+
+    await resetSession();
+    assert.equal(enableCalls(calls), 0, 'an idle bridge declares nothing');
+
+    const received = [];
+    const dispose = await bridge.subscribe((entry) => received.push(entry));
+    await resetSession();
+    assert.equal(enableCalls(calls), 2);
+    assert.equal(calls.filter((call) => call.type === 'listen').length, 1, 'the listener survives the reset');
+    emit('after-reset');
+    assert.deepEqual(received, ['after-reset']);
+
+    await dispose();
+    await resetSession();
+    assert.equal(enableCalls(calls), 2, 'a stopped stream stays stopped');
 });

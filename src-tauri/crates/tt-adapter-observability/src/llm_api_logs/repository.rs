@@ -163,7 +163,7 @@ impl ChatCompletionRepository for LoggingChatCompletionRepository {
         let request_raw = pretty_json(&log_payload);
         let request_readable = format_request_readable(source, &log_payload);
         let request_path = request_raw_path(self.store.log_root(), id);
-        tauri::async_runtime::spawn(async move {
+        self.store.runtime().spawn(async move {
             if let Err(error) = tokio::fs::write(&request_path, request_raw).await {
                 tracing::error!(
                     "Failed to write LLM API request log file {}: {}",
@@ -196,7 +196,7 @@ impl ChatCompletionRepository for LoggingChatCompletionRepository {
 
         let readable_source = stream_readable_source(source, endpoint_path);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let forward_task = tauri::async_runtime::spawn(async move {
+        let forward_task = self.store.runtime().spawn(async move {
             let mut writer = response_writer;
             let mut readable = StreamReadableCollector::new(readable_source);
 

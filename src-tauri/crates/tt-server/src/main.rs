@@ -6,6 +6,7 @@ mod error;
 mod events;
 mod files;
 mod host;
+mod logging;
 mod resources;
 mod security;
 mod startup_paths;
@@ -19,6 +20,8 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tt_adapter_http::HttpClientPool;
 use tt_adapter_media::{FilesystemHostResourceStore, FilesystemUserMediaStore};
+use tt_adapter_observability::devtools::BackendLogStore;
+use tt_adapter_observability::llm_api_logs::{LlmApiLogStore, LoggingChatCompletionRepository};
 use tt_adapter_provider_http::HttpChatCompletionRepository;
 use tt_adapter_storage_core::{
     bundled_resources::DirectoryBundledResources, commit_stage::PageGeneration,
@@ -68,11 +71,20 @@ struct Options {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    // The same buffer the native shell keeps: the backend log panel reads it, the journal still
+    // receives everything through the fmt layer.
+    let backend_logs = Arc::new(BackendLogStore::new());
+    {
+        use tracing_subscriber::prelude::*;
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "info".into()),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .with(backend_logs.layer())
+            .init();
+    }
     let options = Options::parse();
     if !matches!(options.listen.ip(), IpAddr::V4(v) if v.is_loopback())
         && !matches!(options.listen.ip(), IpAddr::V6(v) if v.is_loopback())
@@ -85,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         web_root,
         resource_root,
         archive_root,
+        log_root,
     } = startup_paths::StartupPaths::resolve(
         &options.app_root,
         &options.data_root,
@@ -126,6 +139,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ios_policy: ios_policy.clone(),
         max_commit_frame_bytes: 4 * 1024 * 1024,
     };
+    let llm_api_logs = Arc::new(LlmApiLogStore::new(tokio::runtime::Handle::current(), log_root));
+    llm_api_logs.apply_settings(startup_settings.dev.effective_llm_api_keep());
     let bundled_resources = Arc::new(DirectoryBundledResources::new(resource_root));
     let extension_tools = Arc::new(tt_adapter_extension::tools::AgentExtensionTools::default());
     let http_clients = Arc::new(HttpClientPool::new(concat!(
@@ -138,8 +153,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &data_directory,
             &config,
             HostDependencies {
-                chat_completion_repository: Arc::new(HttpChatCompletionRepository::new(
-                    http_clients.clone(),
+                chat_completion_repository: Arc::new(LoggingChatCompletionRepository::new(
+                    Arc::new(HttpChatCompletionRepository::new(http_clients.clone())),
+                    llm_api_logs.clone(),
                 )),
                 http_client_pool: http_clients.clone(),
                 page_generation: Arc::new(PageGeneration::default()),
@@ -208,6 +224,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         downloads: Default::default(),
         archives,
+        backend_logs,
+        llm_api_logs,
         services,
         files,
         extension_tools,

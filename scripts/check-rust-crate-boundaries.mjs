@@ -128,6 +128,7 @@ const APPLICATION_FORBIDDEN_PACKAGES = new Set([
     'tt-adapter-http',
     'tt-adapter-media',
     'tt-adapter-mcp',
+    'tt-adapter-observability',
     'tt-adapter-provider-http',
     'tt-adapter-workspace-shell',
     'tt-adapter-storage-core',
@@ -160,6 +161,7 @@ const APPLICATION_FORBIDDEN_SOURCE_PATTERNS = [
     ['tt-adapter-http', /\btt_adapter_http::/],
     ['tt-adapter-media', /\btt_adapter_media::/],
     ['tt-adapter-mcp', /\btt_adapter_mcp::/],
+    ['tt-adapter-observability', /\btt_adapter_observability::/],
     ['tt-adapter-provider-http', /\btt_adapter_provider_http::/],
     ['tt-adapter-workspace-shell', /\btt_adapter_workspace_shell::/],
     ['tt-adapter-storage-core', /\btt_adapter_storage_core::/],
@@ -223,6 +225,29 @@ const ADAPTER_TOKENIZATION_FORBIDDEN_SOURCE_PATTERNS = [
     ['axum', /\baxum::/],
     ['image', /\bimage::/],
     ['reqwest', /\breqwest::/],
+    ['tt-adapter-storage-userdata', /\btt_adapter_storage_userdata::/],
+    ['ttsync-core', /\bttsync_core::/],
+    ['zip', /\bzip::/],
+];
+
+// Observability stores and the LLM API log decorator: plain files plus tracing, no host or transport.
+const ADAPTER_OBSERVABILITY_FORBIDDEN_PACKAGES = new Set([
+    'axum',
+    'image',
+    'tar',
+    'tauri',
+    'tauritavern',
+    'tt-adapter-extension',
+    'tt-adapter-storage-userdata',
+    'tt-application',
+    'ttsync-core',
+    'zip',
+]);
+
+const ADAPTER_OBSERVABILITY_FORBIDDEN_SOURCE_PATTERNS = [
+    ...ADAPTER_FORBIDDEN_SOURCE_PATTERNS,
+    ['axum', /\baxum::/],
+    ['image', /\bimage::/],
     ['tt-adapter-storage-userdata', /\btt_adapter_storage_userdata::/],
     ['ttsync-core', /\bttsync_core::/],
     ['zip', /\bzip::/],
@@ -610,6 +635,7 @@ const INNER_CRATES = [
     crateConfig('tt-adapter-http', ADAPTER_HTTP_FORBIDDEN_PACKAGES, ADAPTER_FORBIDDEN_SOURCE_PATTERNS),
     crateConfig('tt-adapter-mcp', ADAPTER_MCP_FORBIDDEN_PACKAGES, ADAPTER_MCP_FORBIDDEN_SOURCE_PATTERNS),
     crateConfig('tt-adapter-tokenization', ADAPTER_TOKENIZATION_FORBIDDEN_PACKAGES, ADAPTER_TOKENIZATION_FORBIDDEN_SOURCE_PATTERNS),
+    crateConfig('tt-adapter-observability', ADAPTER_OBSERVABILITY_FORBIDDEN_PACKAGES, ADAPTER_OBSERVABILITY_FORBIDDEN_SOURCE_PATTERNS),
     crateConfig('tt-adapter-sync', ADAPTER_SYNC_FORBIDDEN_PACKAGES, ADAPTER_SYNC_FORBIDDEN_SOURCE_PATTERNS),
     crateConfig('tt-adapter-archive', ADAPTER_ARCHIVE_FORBIDDEN_PACKAGES, ADAPTER_ARCHIVE_FORBIDDEN_SOURCE_PATTERNS),
     crateConfig('tt-adapter-provider-http', ADAPTER_PROVIDER_HTTP_FORBIDDEN_PACKAGES, ADAPTER_PROVIDER_HTTP_FORBIDDEN_SOURCE_PATTERNS),

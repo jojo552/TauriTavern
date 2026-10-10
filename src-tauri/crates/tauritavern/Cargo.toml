@@ -53,6 +53,7 @@ tt-application = { path = "../tt-application" }
 tt-runtime = { path = "../tt-runtime" }
 tt-adapter-http = { path = "../tt-adapter-http" }
 tt-adapter-mcp = { path = "../tt-adapter-mcp" }
+tt-adapter-observability = { path = "../tt-adapter-observability" }
 tt-adapter-tokenization = { path = "../tt-adapter-tokenization" }
 tt-adapter-sync = { path = "../tt-adapter-sync" }
 tt-adapter-archive = { path = "../tt-adapter-archive" }

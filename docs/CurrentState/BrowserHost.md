@@ -81,14 +81,14 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 ## 5. 当前能力边界
 
-设置页与扩展快捷菜单共同消费宿主能力投影；浏览器不会呈现可点击的原生同步、后端日志或 LLM 日志入口，已有保存的快捷入口也按当前能力过滤。ABI 对不可用命令仍显式返回错误，不伪装功能已经实现。
+设置页与扩展快捷菜单共同消费宿主能力投影；浏览器不会呈现可点击的原生同步或 debug bundle 入口，已有保存的快捷入口也按当前能力过滤。ABI 对不可用命令仍显式返回错误，不伪装功能已经实现。
 
 | 能力 | 浏览器宿主当前状态 |
 | --- | --- |
 | SillyTavern 纯前端扩展、共享 API 与资源端点 | 复用现有前端/共享服务；不是任意第三方扩展全部兼容的保证。Node 后端插件不支持。 |
 | TT LAN / TT-Sync / 同步自动化 | 当前 HTTP command dispatch 未接 `lan_sync_*`、`tt_sync_*`、`sync_*` 命令；原生面板仍依赖 Tauri invoke/event，不能因共享库存在就宣称浏览器可用。 |
 | 前端日志 | 本地 `api.dev.frontendLogs` 与捕获设置可用；`devlog_append_frontend_logs` 将页面日志镜像到服务端 tracing。 |
-| 原生 Dev 日志能力 | backend tail/stream、LLM API log 查询/stream 与 debug bundle 导出未接 HTTP host；`api.dev` 对象存在不代表这些调用可用。服务端后台错误当前留在日志，未接原生 user-error toast hub。 |
+| 后端日志与 LLM API 日志 | 与原生共用 `tt-adapter-observability` 的日志存储：后端 tracing 环形缓冲、LLM 请求记录装饰器与磁盘日志（位于 app root 下私有 `logs` 目录，与 `security` 同样拒绝与静态/数据/资源目录重叠，不被提供或归档）。tail/index/preview/raw 经共同 invoke 读取；实时流由页面声明启用，服务端为该页订阅共享广播并经其 SSE 推送，关闭面板或页面即取消，不设全局开关。订阅落后于广播容量时沿用 SSE 的 gap 协议使页面会话重置，不静默跳过条目；重置后前端重新声明仍在使用的订阅，断开期间的条目以 tail/index 补看。debug bundle 导出未接 HTTP host。服务端后台错误当前留在日志，未接原生 user-error toast hub。 |
 | 内容视口布局 | `api.layout.snapshot()/subscribe()` 照常安装，基于 `visualViewport` / `innerWidth/innerHeight`；不安装原生窗口快照、窗口背景发布或移动端原生 IME glue。 |
 | 剪贴板与外链 | 使用 DOM Clipboard API 与浏览器窗口/导航规则，受安全上下文、权限、用户激活和弹窗阻止约束；不调用原生 clipboard/opener。 |
 | Tauri plugin / shell 能力 | 不模拟 Tauri runtime，不支持 `plugin:*` invoke；原生数据目录选择、系统分享、托盘与原生窗口控制不能视为浏览器能力。 |

@@ -11,6 +11,8 @@ pub struct StartupPaths {
     pub web_root: PathBuf,
     pub resource_root: PathBuf,
     pub archive_root: PathBuf,
+    /// Private LLM API request logs: prompts and responses, never served or archived.
+    pub log_root: PathBuf,
 }
 
 impl StartupPaths {
@@ -32,7 +34,8 @@ impl StartupPaths {
         // data=/state/data is the native layout and remains valid. Resolve pre-existing
         // symlinks too, so a private directory cannot redirect into served/archived data.
         let mut archive_root = app_root.join(".data-archive");
-        for name in ["security", "staging", ".data-archive"] {
+        let mut log_root = app_root.join("logs");
+        for name in ["security", "staging", ".data-archive", "logs"] {
             let private_path = app_root.join(name);
             for exposed_root in [&web_root, &resource_root, &data_root] {
                 reject_overlap(&private_path, exposed_root)?;
@@ -41,8 +44,10 @@ impl StartupPaths {
             for exposed_root in [&web_root, &resource_root, &data_root] {
                 reject_overlap(&private_root, exposed_root)?;
             }
-            if name == ".data-archive" {
-                archive_root = private_root;
+            match name {
+                ".data-archive" => archive_root = private_root,
+                "logs" => log_root = private_root,
+                _ => {}
             }
         }
 
@@ -52,6 +57,7 @@ impl StartupPaths {
             web_root,
             resource_root,
             archive_root,
+            log_root,
         })
     }
 }

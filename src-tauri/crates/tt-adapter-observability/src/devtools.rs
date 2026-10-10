@@ -1,12 +1,12 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tokio::sync::broadcast;
 use tracing::Subscriber;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
@@ -14,6 +14,8 @@ use tracing_subscriber::registry::LookupSpan;
 pub const BACKEND_LOG_EVENT: &str = "tauritavern-backend-log";
 
 const BACKEND_LOG_BUFFER_LIMIT: usize = 800;
+/// Live subscribers that fall this far behind observe `Lagged` instead of silently missing entries.
+const BACKEND_LOG_BROADCAST_CAPACITY: usize = 1024;
 const BACKEND_LOG_MAX_MESSAGE_BYTES: usize = 3072;
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> String {
@@ -44,31 +46,38 @@ pub struct BackendLogEntry {
     pub message: String,
 }
 
+/// Recent backend tracing events plus a broadcast of new ones. Hosts decide how and to whom
+/// live entries are delivered; the store has no notion of windows, pages or stream switches.
 pub struct BackendLogStore {
-    app_handle: AppHandle,
     next_id: AtomicU64,
-    stream_enabled: AtomicBool,
     entries: Mutex<VecDeque<BackendLogEntry>>,
+    updates: broadcast::Sender<BackendLogEntry>,
+}
+
+impl Default for BackendLogStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BackendLogStore {
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub fn new() -> Self {
         Self {
-            app_handle,
             next_id: AtomicU64::new(1),
-            stream_enabled: AtomicBool::new(false),
             entries: Mutex::new(VecDeque::new()),
+            updates: broadcast::channel(BACKEND_LOG_BROADCAST_CAPACITY).0,
         }
+    }
+
+    /// Entries recorded after this call; earlier ones are read with `tail`.
+    pub fn subscribe(&self) -> broadcast::Receiver<BackendLogEntry> {
+        self.updates.subscribe()
     }
 
     pub fn layer(self: &Arc<Self>) -> BackendLogLayer {
         BackendLogLayer {
             store: self.clone(),
         }
-    }
-
-    pub fn set_stream_enabled(&self, enabled: bool) {
-        self.stream_enabled.store(enabled, Ordering::Relaxed);
     }
 
     pub fn tail(&self, limit: usize) -> Vec<BackendLogEntry> {
@@ -87,8 +96,6 @@ impl BackendLogStore {
             entry.message = truncate_utf8(&entry.message, BACKEND_LOG_MAX_MESSAGE_BYTES);
         }
 
-        let should_stream = self.stream_enabled.load(Ordering::Relaxed);
-
         {
             let mut entries = self.entries.lock().unwrap();
             entries.push_back(entry.clone());
@@ -97,9 +104,8 @@ impl BackendLogStore {
             }
         }
 
-        if should_stream {
-            let _ = self.app_handle.emit(BACKEND_LOG_EVENT, entry);
-        }
+        // No receiver simply means nobody is watching live; the entry is already buffered.
+        let _ = self.updates.send(entry);
     }
 }
 

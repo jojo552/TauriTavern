@@ -29,7 +29,6 @@ const SHORTCUTS = [
     },
     {
         id: 'backend-logs',
-        capability: 'supportsBackendLogs',
         label: 'Backend Logs',
         icon: 'fa-server',
         open: async () => {
@@ -39,7 +38,6 @@ const SHORTCUTS = [
     },
     {
         id: 'llm-api-logs',
-        capability: 'supportsLlmApiLogs',
         label: 'LLM API Logs',
         icon: 'fa-file-lines',
         open: async () => {

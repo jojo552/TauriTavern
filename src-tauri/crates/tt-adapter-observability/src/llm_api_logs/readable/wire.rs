@@ -6,7 +6,7 @@ use tt_ports::repositories::chat_completion_repository::{
     CHAT_COMPLETION_PROVIDER_STATE_FIELD, ChatCompletionSource,
 };
 
-pub(in crate::infrastructure::logging::llm_api_logs) fn format_endpoint(
+pub(in crate::llm_api_logs) fn format_endpoint(
     base_url: &str,
     endpoint_path: &str,
 ) -> String {
@@ -20,7 +20,7 @@ pub(in crate::infrastructure::logging::llm_api_logs) fn format_endpoint(
         (false, false) => format!("{base}/{path}"),
     };
 
-    let Ok(mut url) = reqwest::Url::parse(&joined) else {
+    let Ok(mut url) = url::Url::parse(&joined) else {
         return joined;
     };
 
@@ -35,7 +35,7 @@ pub(in crate::infrastructure::logging::llm_api_logs) fn format_endpoint(
     }
 }
 
-pub(in crate::infrastructure::logging::llm_api_logs) fn extract_model(
+pub(in crate::llm_api_logs) fn extract_model(
     payload: &Value,
 ) -> Option<String> {
     payload
@@ -46,11 +46,11 @@ pub(in crate::infrastructure::logging::llm_api_logs) fn extract_model(
         .map(str::to_string)
 }
 
-pub(in crate::infrastructure::logging::llm_api_logs) fn pretty_json(value: &Value) -> String {
+pub(in crate::llm_api_logs) fn pretty_json(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
-pub(in crate::infrastructure::logging::llm_api_logs) fn wire_log_payload(
+pub(in crate::llm_api_logs) fn wire_log_payload(
     payload: &Value,
 ) -> Cow<'_, Value> {
     let has_provider_state = payload
@@ -155,7 +155,7 @@ fn media_marker(mime_type: &str, data_len: usize) -> String {
     format!("<inline media omitted; mime={mime_type}; base64_chars={data_len}>")
 }
 
-pub(in crate::infrastructure::logging::llm_api_logs) fn stream_readable_source(
+pub(in crate::llm_api_logs) fn stream_readable_source(
     source: ChatCompletionSource,
     endpoint_path: &str,
 ) -> ChatCompletionSource {

@@ -9,9 +9,10 @@ use std::time::Duration;
 
 use crate::app::backend_errors::BackendErrorHub;
 use crate::app::dev_observability::DevObservabilityHub;
-use crate::infrastructure::logging::{devtools, llm_api_logs, tracing_runtime};
+use crate::infrastructure::logging::tracing_runtime;
 use crate::infrastructure::paths::RuntimePaths;
 use tauri::Manager;
+use tt_adapter_observability::{devtools, llm_api_logs};
 
 pub(super) struct ObservabilityHandles {
     pub(super) llm_api_logs: Arc<llm_api_logs::LlmApiLogStore>,
@@ -38,14 +39,14 @@ pub(super) fn install(
 ) -> Result<ObservabilityHandles, Box<dyn std::error::Error>> {
     // BackendErrorHub is managed before tracing so user-visible startup errors
     // can be queued until the frontend bridge announces readiness.
-    let backend_log_store = Arc::new(devtools::BackendLogStore::new(app_handle.clone()));
+    let backend_log_store = Arc::new(devtools::BackendLogStore::new());
     let backend_error_hub = Arc::new(BackendErrorHub::new(app_handle.clone()));
     app.manage(backend_error_hub.clone());
 
     // LLM API logs are both a managed command dependency and the runtime sink
     // used by chat-completion repositories built later in AppState.
     let llm_api_log_store = Arc::new(llm_api_logs::LlmApiLogStore::new(
-        app_handle.clone(),
+        tauri::async_runtime::handle().inner().clone(),
         runtime_paths.log_root.clone(),
     ));
     app.manage(llm_api_log_store.clone());

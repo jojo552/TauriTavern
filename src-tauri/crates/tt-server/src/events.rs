@@ -107,6 +107,23 @@ impl PageBus {
         self.wake.notify_waiters();
     }
 
+    /// Delivers the existing native event wire shape to this page only.
+    pub fn emit(&self, event: &str, payload: impl Serialize) -> Result<(), ChannelClosed> {
+        let payload = serde_json::to_value(payload).map_err(|_| ChannelClosed)?;
+        self.push(json!({ "type": "event", "event": event, "payload": payload }))
+    }
+
+    /// Force the existing SSE gap/reset protocol when a producer lost records.
+    pub fn fail_gap(&self) {
+        let mut retained = self.retained.lock().expect("page bus poisoned");
+        retained.failed = true;
+        retained.frames.clear();
+        retained.bytes = 0;
+        self.closed.cancel();
+        drop(retained);
+        self.wake.notify_waiters();
+    }
+
     /// Resolves a `{"$channel": id}` argument. Each id may be opened once per page.
     pub fn channel(
         self: &Arc<Self>,

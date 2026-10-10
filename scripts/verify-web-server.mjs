@@ -37,27 +37,29 @@ async function invoke(command, args = {}, body) {
     return request('/__tt/invoke', { method: 'POST', headers,
         body: body ? gzipSync(body) : JSON.stringify({ sessionId: session.sessionId, command, args }) });
 }
-async function readReady() {
-    const decoder = new TextDecoder();
-    let buffer = '';
+const decoder = new TextDecoder();
+let streamBuffer = '';
+/** Next data frame of this page's event stream; keepalive comments carry no data. */
+async function readFrame() {
     for (;;) {
-        const { value, done } = await streamReader.read();
-        if (done) throw new Error('Event stream ended before ready');
-        buffer += decoder.decode(value, { stream: true });
-        if (buffer.length > 65536) throw new Error('Event stream did not provide a bounded ready frame');
         let boundary;
-        while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
-            const event = buffer.slice(0, boundary.index);
-            buffer = buffer.slice(boundary.index + boundary[0].length);
+        while ((boundary = /\r?\n\r?\n/.exec(streamBuffer))) {
+            const event = streamBuffer.slice(0, boundary.index);
+            streamBuffer = streamBuffer.slice(boundary.index + boundary[0].length);
             const data = event.split(/\r?\n/).filter(line => line.startsWith('data:'))
                 .map(line => line.slice(5).replace(/^ /, '')).join('\n');
-            if (!data) continue; // Keepalive comments are not a ready message.
-            const frame = JSON.parse(data);
-            assert.equal(frame.type, 'ready');
-            assert.equal(frame.sessionId, session.sessionId);
-            return;
+            if (data) return JSON.parse(data);
         }
+        const { value, done } = await streamReader.read();
+        if (done) throw new Error('Event stream ended before the expected frame');
+        streamBuffer += decoder.decode(value, { stream: true });
+        if (streamBuffer.length > 1 << 20) throw new Error('Event stream frame is unbounded');
     }
+}
+async function readReady() {
+    const frame = await readFrame();
+    assert.equal(frame.type, 'ready');
+    assert.equal(frame.sessionId, session.sessionId);
 }
 try {
     // Every operation after mkdtemp is covered by cleanup, including password/setup/spawn failures.
@@ -116,11 +118,32 @@ try {
         const aborted = await invoke('abort_settings_commit', { sessionId: commit.sessionId });
         assert.equal(aborted.status, 200);
     }
+    // Log panels: the backend buffer saw startup, and a page that enables the stream receives new
+    // entries over its own events stream. A failed command is the deterministic log producer.
+    const tail = await (await invoke('devlog_get_backend_log_tail', { limit: 800 })).json();
+    assert.ok(tail.some(entry => entry.message.includes('Native TT browser host ready')), 'backend tail holds startup');
+    assert.equal((await invoke('devlog_set_backend_log_stream_enabled', { enabled: true })).status, 200);
+    assert.equal((await invoke('verify_unknown_command_for_log')).status, 400);
+    for (;;) {
+        const frame = await readFrame();
+        if (frame.type === 'event' && frame.event === 'tauritavern-backend-log'
+            && frame.payload.message.includes('verify_unknown_command_for_log')) break;
+    }
+    assert.equal((await invoke('devlog_set_backend_log_stream_enabled', { enabled: false })).status, 200);
+    const llmIndex = await invoke('devlog_get_llm_api_log_index', { limit: 10 });
+    assert.equal(llmIndex.status, 200);
+    assert.deepEqual(await llmIndex.json(), [], 'fresh data has no LLM API requests');
+    assert.equal((await invoke('devlog_get_llm_api_log_preview', { id: 1 })).status, 404);
+    const unauthorizedLogs = await request('/__tt/invoke', { method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-tt-csrf': 'wrong' },
+        body: JSON.stringify({ sessionId: session.sessionId, command: 'devlog_get_backend_log_tail', args: {} }) });
+    assert.equal(unauthorizedLogs.status, 403, 'log reads require the page CSRF token');
+
     const closed = await request('/__tt/session/close', { method: 'POST',
         headers: { 'content-type': 'application/json', 'x-tt-csrf': session.csrfToken },
         body: JSON.stringify({ sessionId: session.sessionId }) });
     assert.equal(closed.status, 204);
-    console.log('Packaged host verified: identity, authentication, SSE ready, gzip frames and commit reclamation');
+    console.log('Packaged host verified: identity, authentication, SSE ready, gzip frames, commit reclamation and log panels');
 } finally {
     clearTimeout(deadline);
     try {

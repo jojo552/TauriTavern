@@ -172,6 +172,7 @@ const delivered = await dev.exportBundle();
 ### 语义
 
 - 由用户在系统保存面板中选择位置（iOS 为分享面板），见[文件传输](../CurrentState/FileTransfer.md)。
+- 浏览器宿主尚未提供 debug bundle：调用会明确拒绝，不返回伪造的交付结果。其余 `api.dev` 能力在浏览器中可用，实时流在页面会话重置后重新订阅，断开期间的条目以 `tail()` / `index()` 补看。
 - 导出内容包含后端文件日志、前端日志 snapshot、LLM API Logs（含 raw）与设置/版本信息。
 - 导出文件可能包含 prompt/响应体等敏感信息；分享前请自行检查。
 

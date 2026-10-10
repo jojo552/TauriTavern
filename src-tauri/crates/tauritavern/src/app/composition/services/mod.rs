@@ -15,11 +15,9 @@ use tt_runtime::{HostDependencies, RuntimeConfig};
 
 use crate::app::{AppServices, StartupProfile};
 use crate::infrastructure::bundled_resources::BundledResourceStore;
-use crate::infrastructure::logging::llm_api_logs::{
-    LlmApiLogStore, LoggingChatCompletionRepository,
-};
 use crate::infrastructure::paths::RuntimePaths;
 use tt_adapter_http::GitHubUpdateRepository;
+use tt_adapter_observability::llm_api_logs::{LlmApiLogStore, LoggingChatCompletionRepository};
 
 pub(super) async fn build(
     app_handle: &AppHandle,

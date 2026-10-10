@@ -4,14 +4,14 @@ use tt_ports::repositories::chat_completion_repository::ChatCompletionSource;
 
 use super::reasoning::collect_visible_reasoning_texts;
 
-pub(in crate::infrastructure::logging::llm_api_logs) struct StreamReadableCollector {
+pub(in crate::llm_api_logs) struct StreamReadableCollector {
     source: ChatCompletionSource,
     text_buffer: String,
     reasoning_buffer: String,
 }
 
 impl StreamReadableCollector {
-    pub(in crate::infrastructure::logging::llm_api_logs) fn new(
+    pub(in crate::llm_api_logs) fn new(
         source: ChatCompletionSource,
     ) -> Self {
         Self {
@@ -21,7 +21,7 @@ impl StreamReadableCollector {
         }
     }
 
-    pub(in crate::infrastructure::logging::llm_api_logs) fn push(&mut self, chunk: &str) {
+    pub(in crate::llm_api_logs) fn push(&mut self, chunk: &str) {
         let trimmed = chunk.trim();
         if trimmed.is_empty() || trimmed == "[DONE]" {
             return;
@@ -182,7 +182,7 @@ impl StreamReadableCollector {
         }
     }
 
-    pub(in crate::infrastructure::logging::llm_api_logs) fn into_string(self) -> String {
+    pub(in crate::llm_api_logs) fn into_string(self) -> String {
         let reasoning_is_empty = self.reasoning_buffer.trim().is_empty();
         let text_is_empty = self.text_buffer.trim().is_empty();
         match (reasoning_is_empty, text_is_empty) {
