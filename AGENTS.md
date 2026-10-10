@@ -29,4 +29,5 @@
 - **测试准入:** 只为可观察的稳定行为、非平凡不变式或边界，以及已经发生并修复的具体缺陷添加测试；代码变化和覆盖率本身不是理由。禁止用正则或文本断言源码，不测试字面量、明显控制流、直接委托、实现细节或已移除功能，不提前添加回归测试。
 - **测试实践:** 优先复用最高层的现有行为覆盖，避免在各层重复同一断言；并发测试使用确定性协调，不依赖 sleep。删除功能或测试时同步删除失效的 fixture、fake、hook 与依赖。核心仓储迁移或格式语义变更保留最小可运行测试；先运行受影响 crate 的 focused tests 与 `scripts/check-rust-crate-boundaries.mjs`，每次实现完成后运行完整 harness：`pnpm run check`。
 - **前端交互:** 注意 `FrontendGuide.md` 中关于与前端交互的说明，特别是 DTO 和事件的约定。
+- **Agent 指南单一来源:** 本文件是唯一来源，`CLAUDE.md` 是指向它的软链接，供 Claude Code 读取同一份内容；修改规则只改本文件。
 - **仓库级 Skill:** 日常开发 Skill 以 `.agents/skills/` 为唯一来源，`.claude/skills` 是指向它的软链接；`.github/codex/skills/` 只供 CI 受控使用。涉及架构规划、统一机制、上游同步或审阅时，使用 `maintain-conceptual-integrity`。
