@@ -130,6 +130,8 @@ mod tests {
             let (_, frame) = stream.next().await.unwrap().unwrap();
             let frame: Value = serde_json::from_str(&frame).unwrap();
             assert_eq!(frame["type"], "event");
+            // The browser transport rejects event frames without a numeric event id.
+            assert!(frame["id"].is_u64());
             assert_eq!(frame["event"], "tauritavern-backend-log");
             assert_eq!(frame["payload"]["id"], 1);
         }

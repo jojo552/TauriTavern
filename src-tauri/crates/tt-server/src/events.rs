@@ -53,6 +53,8 @@ pub struct PageBus {
     channel_ids: Mutex<HashSet<String>>,
     /// Each attach supersedes the previous stream of the same page.
     attachment: AtomicU64,
+    /// Numbers emitted events like the native event system; listeners receive it as `id`.
+    event_ids: AtomicU64,
     closed: CancellationToken,
 }
 
@@ -110,7 +112,8 @@ impl PageBus {
     /// Delivers the existing native event wire shape to this page only.
     pub fn emit(&self, event: &str, payload: impl Serialize) -> Result<(), ChannelClosed> {
         let payload = serde_json::to_value(payload).map_err(|_| ChannelClosed)?;
-        self.push(json!({ "type": "event", "event": event, "payload": payload }))
+        let id = self.event_ids.fetch_add(1, Ordering::Relaxed);
+        self.push(json!({ "type": "event", "event": event, "id": id, "payload": payload }))
     }
 
     /// Force the existing SSE gap/reset protocol when a producer lost records.

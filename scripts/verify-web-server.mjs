@@ -126,8 +126,10 @@ try {
     assert.equal((await invoke('verify_unknown_command_for_log')).status, 400);
     for (;;) {
         const frame = await readFrame();
-        if (frame.type === 'event' && frame.event === 'tauritavern-backend-log'
-            && frame.payload.message.includes('verify_unknown_command_for_log')) break;
+        if (frame.type !== 'event' || frame.event !== 'tauritavern-backend-log') continue;
+        // The same frame shape the browser transport validates before dispatching to listeners.
+        assert.ok(Number.isSafeInteger(frame.id), 'event frames carry a numeric id');
+        if (frame.payload.message.includes('verify_unknown_command_for_log')) break;
     }
     assert.equal((await invoke('devlog_set_backend_log_stream_enabled', { enabled: false })).status, 200);
     const llmIndex = await invoke('devlog_get_llm_api_log_index', { limit: 10 });
