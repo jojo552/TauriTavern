@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use tokio::fs;
 use std::io::Write;
+use tokio::fs;
 use tokio::sync::Mutex as AsyncMutex;
 use tt_domain::errors::DomainError;
 
@@ -64,19 +64,33 @@ pub async fn append(path: &Path, offset: u64, data: &[u8]) -> Result<u64, Domain
     // the filesystem write continues. This task executes once, never retries a frame.
     tokio::task::spawn_blocking(move || {
         let _guard = receiver.blocking_lock();
-        let mut file = std::fs::OpenOptions::new().append(true).open(&path)
-            .map_err(|error| DomainError::file_io("Open staged file", path.display().to_string(), error))?;
-        let size = file.metadata()
-            .map_err(|error| DomainError::file_io("Stat staged file", path.display().to_string(), error))?.len();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .map_err(|error| {
+                DomainError::file_io("Open staged file", path.display().to_string(), error)
+            })?;
+        let size = file
+            .metadata()
+            .map_err(|error| {
+                DomainError::file_io("Stat staged file", path.display().to_string(), error)
+            })?
+            .len();
         if size != offset {
-            return Err(DomainError::InvalidData(format!("File staging offset mismatch: expected {size}, got {offset}")));
+            return Err(DomainError::InvalidData(format!(
+                "File staging offset mismatch: expected {size}, got {offset}"
+            )));
         }
-        file.write_all(&data)
-            .map_err(|error| DomainError::file_io("Append staged file", path.display().to_string(), error))?;
-        file.flush()
-            .map_err(|error| DomainError::file_io("Flush staged file", path.display().to_string(), error))?;
+        file.write_all(&data).map_err(|error| {
+            DomainError::file_io("Append staged file", path.display().to_string(), error)
+        })?;
+        file.flush().map_err(|error| {
+            DomainError::file_io("Flush staged file", path.display().to_string(), error)
+        })?;
         Ok(offset + data.len() as u64)
-    }).await.map_err(|error| DomainError::InternalError(format!("Staged append task failed: {error}")))?
+    })
+    .await
+    .map_err(|error| DomainError::InternalError(format!("Staged append task failed: {error}")))?
 }
 
 pub async fn finish(path: &Path, expected_size: u64) -> Result<u64, DomainError> {
@@ -85,12 +99,19 @@ pub async fn finish(path: &Path, expected_size: u64) -> Result<u64, DomainError>
     tokio::task::spawn_blocking(move || {
         let _guard = receiver.blocking_lock();
         let size = std::fs::metadata(&path)
-            .map_err(|error| DomainError::file_io("Stat staged file", path.display().to_string(), error))?.len();
+            .map_err(|error| {
+                DomainError::file_io("Stat staged file", path.display().to_string(), error)
+            })?
+            .len();
         if size != expected_size {
-            return Err(DomainError::InvalidData(format!("File staging size mismatch: expected {expected_size}, got {size}")));
+            return Err(DomainError::InvalidData(format!(
+                "File staging size mismatch: expected {expected_size}, got {size}"
+            )));
         }
         Ok(size)
-    }).await.map_err(|error| DomainError::InternalError(format!("Staged finish task failed: {error}")))?
+    })
+    .await
+    .map_err(|error| DomainError::InternalError(format!("Staged finish task failed: {error}")))?
 }
 
 pub async fn discard(path: &Path) -> Result<(), DomainError> {
@@ -101,9 +122,15 @@ pub async fn discard(path: &Path) -> Result<(), DomainError> {
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(DomainError::file_io("Remove staged file", path.display().to_string(), error)),
+            Err(error) => Err(DomainError::file_io(
+                "Remove staged file",
+                path.display().to_string(),
+                error,
+            )),
         }
-    }).await.map_err(|error| DomainError::InternalError(format!("Staged discard task failed: {error}")))?
+    })
+    .await
+    .map_err(|error| DomainError::InternalError(format!("Staged discard task failed: {error}")))?
 }
 
 #[cfg(test)]

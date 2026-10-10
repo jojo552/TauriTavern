@@ -61,7 +61,7 @@ Skill 提供工作方法、材料和脚本，通过只读 `skills/` 视图与 `w
 
 ## 扩展工具
 
-扩展在启动时注册普通 JS 函数，适用于 Chat、Session 或两者，见 [注册扩展工具](../API/Agent.md#注册扩展工具)。Tauri host 负责 WebView 通信与回执等待，通过 `tt-ports::extension_tools::ExtensionTools` 向 runtime 提供目录和调用能力。
+扩展在启动时注册普通 JS 函数，适用于 Chat、Session 或两者，见 [注册扩展工具](../API/Agent.md#注册扩展工具)。原生与浏览器 host 分别提供 WebView Channel 或 SSE sink；`tt-adapter-extension::tools::AgentExtensionTools` 负责页面所属注册、回执等待、超时与取消，通过 `tt-ports::extension_tools::ExtensionTools` 向共同应用运行时提供目录和调用能力。
 
 执行时按稳定 ID 查找当前启用的函数，工具快照不保存函数实例。扩展返回普通 JSON，MCP 响应按自身协议整理，随后进入共同的结果处理链路。
 

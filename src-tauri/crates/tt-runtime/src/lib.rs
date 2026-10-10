@@ -5,7 +5,6 @@
 
 mod agent;
 mod cache_reconciler;
-pub mod extension_tools;
 mod repositories;
 mod services;
 

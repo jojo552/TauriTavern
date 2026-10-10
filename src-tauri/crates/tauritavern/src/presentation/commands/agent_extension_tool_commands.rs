@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use tauri::{State, Webview, ipc::Channel};
+use tt_adapter_extension::tools::AgentExtensionTools;
 use tt_contracts::extension_tools::{
     ExtensionToolDefinition, ExtensionToolEvent, ResolveExtensionToolCallDto,
     SetExtensionToolEnabledDto,
 };
 use tt_ports::extension_tools::ExtensionToolEventSink;
-use tt_runtime::extension_tools::AgentExtensionTools;
 
 use crate::presentation::errors::CommandError;
 

@@ -127,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_commit_frame_bytes: 4 * 1024 * 1024,
     };
     let bundled_resources = Arc::new(DirectoryBundledResources::new(resource_root));
-    let extension_tools = Arc::new(tt_runtime::extension_tools::AgentExtensionTools::default());
+    let extension_tools = Arc::new(tt_adapter_extension::tools::AgentExtensionTools::default());
     let http_clients = Arc::new(HttpClientPool::new(concat!(
         "TauriTavern/",
         env!("CARGO_PKG_VERSION"),

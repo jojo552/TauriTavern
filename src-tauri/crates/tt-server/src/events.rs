@@ -496,12 +496,12 @@ mod tests {
     /// that page's reply, and refuses replies from any other page.
     #[tokio::test]
     async fn extension_tool_calls_round_trip_through_the_page_stream() {
+        use tt_adapter_extension::tools::AgentExtensionTools;
         use tt_contracts::extension_tools::{
             ExtensionToolCall, ExtensionToolDefinition, ExtensionToolReply, ExtensionToolTarget,
         };
         use tt_domain::models::tool::AgentToolScope;
         use tt_ports::extension_tools::ExtensionTools;
-        use tt_runtime::extension_tools::AgentExtensionTools;
 
         let bus = Arc::new(PageBus::default());
         let mut stream = bus.attach(None).unwrap();

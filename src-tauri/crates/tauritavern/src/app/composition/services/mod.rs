@@ -4,6 +4,7 @@ mod sync;
 use std::sync::Arc;
 
 use tauri::{AppHandle, Manager};
+use tt_adapter_extension::tools::AgentExtensionTools;
 use tt_adapter_http::HttpClientPool;
 use tt_adapter_provider_http::HttpChatCompletionRepository;
 use tt_adapter_storage_core::{DataDirectory, commit_stage::PageGeneration};
@@ -19,7 +20,6 @@ use crate::infrastructure::logging::llm_api_logs::{
 };
 use crate::infrastructure::paths::RuntimePaths;
 use tt_adapter_http::GitHubUpdateRepository;
-use tt_runtime::extension_tools::AgentExtensionTools;
 
 pub(super) async fn build(
     app_handle: &AppHandle,

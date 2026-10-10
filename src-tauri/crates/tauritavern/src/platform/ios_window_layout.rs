@@ -9,8 +9,8 @@ use objc2_foundation::{NSArray, NSData, NSObjectProtocol, NSPoint, NSRect, NSSiz
 use objc2_ui_kit::{
     NSLayoutConstraint, UIColor, UIGestureRecognizer, UIGestureRecognizerDelegate,
     UIGestureRecognizerState, UIImage, UIImageView, UIPanGestureRecognizer, UIScrollView,
-    UIScrollViewContentInsetAdjustmentBehavior, UIScrollViewKeyboardDismissMode,
-    UIStatusBarStyle, UIView, UIViewAutoresizing,
+    UIScrollViewContentInsetAdjustmentBehavior, UIScrollViewKeyboardDismissMode, UIStatusBarStyle,
+    UIView, UIViewAutoresizing,
 };
 use tauri::{AppHandle, WebviewWindow};
 use tt_adapter_media::window_backdrop::{BackdropStrip, StripEdge};
@@ -148,7 +148,11 @@ impl KeyboardScrollView {
             return;
         }
         let height = self.ivars().webview.bounds().size.height;
-        let constraint = self.ivars().webview.heightAnchor().constraintEqualToConstant(height);
+        let constraint = self
+            .ivars()
+            .webview
+            .heightAnchor()
+            .constraintEqualToConstant(height);
         self.ivars().keyboard_constraint.setActive(false);
         constraint.setActive(true);
         *held = Some(constraint);

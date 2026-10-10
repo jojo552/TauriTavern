@@ -102,7 +102,7 @@ struct AgentRuntimeFixture {
     model_gateway: Arc<MockAgentModelGateway>,
     mcp_service: Arc<McpService>,
     mcp_gateway: Arc<ContractMcpGateway>,
-    extension_tools: Arc<tt_runtime::extension_tools::AgentExtensionTools>,
+    extension_tools: Arc<tt_adapter_extension::tools::AgentExtensionTools>,
 }
 
 fn temp_root(label: &str) -> PathBuf {
@@ -250,7 +250,7 @@ fn agent_runtime_fixture_with_shell(
         Arc::new(FileMcpServerRepository::new(root.join("_tauritavern/mcp"))),
         mcp_gateway.clone(),
     ));
-    let extension_tools = Arc::new(tt_runtime::extension_tools::AgentExtensionTools::default());
+    let extension_tools = Arc::new(tt_adapter_extension::tools::AgentExtensionTools::default());
     let service = Arc::new(AgentRuntimeService::new(
         agent_repository.clone() as Arc<dyn AgentRunRepository>,
         agent_repository.clone()

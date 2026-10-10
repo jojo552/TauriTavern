@@ -115,7 +115,7 @@
 
 行为覆盖见 [quick-reply-startup.test.mjs](../../tests/browser/quick-reply-startup.test.mjs)：实际 feature `init()` 验证启动不重复请求、空数组消费、消费/丢弃后 fresh 读取、迁移与前向 context links，以及 HTTP/解析/非法 snapshot 错误传播。
 
-后端采样入口见 [bootstrap_commands.rs](../../src-tauri/crates/tauritavern/src/presentation/commands/bootstrap_commands.rs)。
+完整快照读取、域错误上下文和 DTO 组装集中在应用层 [bootstrap_metadata.rs](../../src-tauri/crates/tt-application/src/services/bootstrap_metadata.rs)；[原生命令](../../src-tauri/crates/tauritavern/src/presentation/commands/bootstrap_commands.rs) 与浏览器宿主只传入同一组服务并映射边界错误。
 
 ---
 

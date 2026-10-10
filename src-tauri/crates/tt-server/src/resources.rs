@@ -648,7 +648,9 @@ mod tests {
         assert!(resources.owned_commit(CommitKind::Settings, "a").is_ok());
 
         let finish = Args(serde_json::json!({ "sessionId": "a", "expectedSize": 2 }));
-        let claimed = resources.claim_finish(CommitKind::Settings, &finish).unwrap();
+        let claimed = resources
+            .claim_finish(CommitKind::Settings, &finish)
+            .unwrap();
         assert_eq!((claimed.id.as_str(), claimed.expected_size), ("a", 2));
         assert!(resources.owned_commit(CommitKind::Settings, "a").is_err());
     }

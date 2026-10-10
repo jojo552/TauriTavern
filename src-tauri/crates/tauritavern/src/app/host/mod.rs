@@ -16,10 +16,10 @@ mod window;
 use std::sync::Arc;
 
 use tauri::Manager;
+use tt_adapter_extension::tools::AgentExtensionTools;
 use tt_adapter_storage_core::commit_stage::PageGeneration;
 
 use crate::presentation::commands::registry::invoke_handler;
-use tt_runtime::extension_tools::AgentExtensionTools;
 
 #[cfg(target_os = "windows")]
 pub(crate) use shutdown::request_frontend_shutdown;

@@ -91,7 +91,7 @@ src-tauri/
 | `tt-adapter-storage-core` | `DataDirectory`、基础文件系统与格式 helper、chat/settings/user/theme/secret/quick reply/prompt cache/asset/llm connection/extension-store；基于 `BundledResources` 的 content/preset IO 与目录资源实现 |
 | `tt-adapter-storage-userdata` | character、world info、agent workspace、agent profile、skill local package store、PNG card metadata |
 | `tt-adapter-media` | persona/avatar/background/user media/image metadata、browser-visible host resource file store |
-| `tt-adapter-extension` | third-party extension 发现、安装、版本检查、更新、分支查询/切换、删除与移动；Gitoxide smart HTTP 与 embedded worktree |
+| `tt-adapter-extension` | third-party extension 发现、安装、版本检查、更新、分支查询/切换、删除与移动；Gitoxide smart HTTP 与 embedded worktree；页面所属的 Agent 扩展工具 registry / receipt runtime |
 | `tt-adapter-workspace-shell` | Bashkit（含 jq/Python）与 QuickJS 执行；受限 `WorkspaceFs` 适配 |
 | `tt-adapter-sync` | LAN Sync、TT-Sync v2 runtime、stores、client/server、sync jobs |
 | `tt-adapter-archive` | data archive import/export executor、job staging file gateway、archive path safety |
@@ -264,7 +264,7 @@ adapter 是外层细节，但不是可以任意堆放的 common bucket。一个 
 
 - `tt-adapter-storage-core` 只承载基础 data root 能力和较底层的文件系统 helper。它不是“所有文件仓储”的新大桶。
 - `tt-adapter-storage-userdata` 承载长期用户数据仓储，例如角色卡、世界书、Agent workspace/profile、Skill package。它关心 data root / user data 语义，而不是泛泛的“文件”。
-- `tt-adapter-extension` 承载 third-party extension 发现、安装、版本检查、更新、分支查询/切换、删除与移动，以及 Git transport、repository 与 worktree 物化边界。扩展仓库不是普通 user data JSON。
+- `tt-adapter-extension` 承载 third-party extension 发现、安装、版本检查、更新、分支查询/切换、删除与移动，以及 Git transport、repository 与 worktree 物化边界。`tools::AgentExtensionTools` 实现 `tt-ports::extension_tools::ExtensionTools`，拥有页面所属的注册项、待确认回执、超时与取消；宿主提供 `ExtensionToolEventSink` transport 并在页面结束时调用清理，application 保留工具 policy。扩展仓库不是普通 user data JSON，扩展工具 concrete runtime 也不是 `tt-runtime` composition。
 - `tt-adapter-media` 承载浏览器可见的 avatar/background/user media 资源契约。
 - `tt-adapter-workspace-shell` 通过 `WorkspaceShell` 提供执行，经 `WorkspaceFs` 访问文件；权限、Skill 绑定、冻结宏投影与发布策略由 application 拥有。
 - `tt-adapter-provider-http`、`tt-adapter-mcp` 和 `tt-adapter-tokenization` 可以复用 `tt-adapter-http`，但协议/provider 规则不能下沉到通用 HTTP helper。

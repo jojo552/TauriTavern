@@ -26,11 +26,11 @@ use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::services::ServeDir;
+use tt_adapter_extension::tools::AgentExtensionTools;
 use tt_application::dto::agent_dto::{AgentRunLiveUpdateDto, AgentSubscribeRunLiveProjectionDto};
-use tt_application::dto::bootstrap_dto::BootstrapMetadataDto;
-use tt_application::dto::group_dto::GroupDto;
 use tt_application::dto::settings_dto::UpdateTauriTavernSettingsDto;
 use tt_application::services::agent_runtime_service::AgentRunLivePresenter;
+use tt_application::services::bootstrap_metadata::read_bootstrap_metadata;
 use tt_application::services::bundled_template_service::BundledTemplateService;
 use tt_application::services::host_resource_service::{
     HostResourceDeliveryCapabilities, HostResourceService,
@@ -45,7 +45,6 @@ use tt_contracts::extension_tools::{
 use tt_domain::ios_policy::IosPolicyActivationReport;
 use tt_ports::extension_tools::ExtensionToolEventSink;
 use tt_runtime::CoreServices;
-use tt_runtime::extension_tools::AgentExtensionTools;
 
 use crate::ai::AiSession;
 use crate::error::CommandError;
@@ -595,45 +594,17 @@ async fn host_command(
             "gitBranch": option_env!("TAURITAVERN_GIT_BRANCH").filter(|v| !v.is_empty()),
             "defaultUpdateChannel": "stable",
         })),
-        "get_bootstrap_metadata" => {
-            let (characters, groups, avatars, secret_state) = tokio::join!(
-                services.character_service.get_all_characters(true),
-                services.group_service.get_all_groups(),
-                services.avatar_service.get_avatars(),
-                services.secret_service.read_secret_state(),
-            );
-            // Same complete startup snapshot as the native command. Propagate the domain error
-            // to the caller; logging it and returning an empty domain would claim a false success.
-            let characters = characters.map_err(|error| {
-                CommandError::InternalServerError(format!(
-                    "Failed to load bootstrap characters snapshot: {error}"
-                ))
-            })?;
-            let groups = groups
-                .map(|groups| groups.into_iter().map(GroupDto::from).collect())
-                .map_err(|error| {
-                    CommandError::InternalServerError(format!(
-                        "Failed to load bootstrap groups snapshot: {error}"
-                    ))
-                })?;
-            let avatars = avatars.map_err(|error| {
-                CommandError::InternalServerError(format!(
-                    "Failed to load bootstrap avatars snapshot: {error}"
-                ))
-            })?;
-            let secret_state = secret_state.map_err(|error| {
-                CommandError::InternalServerError(format!(
-                    "Failed to load bootstrap secret state snapshot: {error}"
-                ))
-            })?;
-            to_json(BootstrapMetadataDto {
-                characters,
-                groups,
-                avatars,
-                secret_state,
-                ios_policy: host.ios_policy.clone(),
-            })
-        }
+        "get_bootstrap_metadata" => to_json(
+            read_bootstrap_metadata(
+                &services.character_service,
+                &services.group_service,
+                &services.avatar_service,
+                &services.secret_service,
+                &host.ios_policy,
+            )
+            .await
+            .map_err(CommandError::from)?,
+        ),
         "update_tauritavern_settings" => {
             let dto: UpdateTauriTavernSettingsDto = arg(args, "dto")?;
             let retention_updated = dto

@@ -15,6 +15,7 @@ pub mod agent_workspace_scope;
 pub mod asset_service;
 pub mod avatar_service;
 pub mod background_service;
+pub mod bootstrap_metadata;
 pub mod bundled_template_service;
 pub mod character_service;
 pub mod chat_commit_service;

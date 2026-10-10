@@ -46,7 +46,7 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 - SSE 本身断开不强制中止仍可得到成功响应的 HTTP 保存。实际 HTTP 中断只报告结果未知，绝不自动重放 invoke；一次性 commit 的 offset 与最终确认规则保持不变。
 - 合法 owner 的 session 消失（服务器重启/过期）或回放 gap，服务器返回无 id `{type:'session-reset', reason:'expired'|'gap'}`，结束旧页。前端创建新 session/CSRF，失败的旧请求不重放；后续独立请求可继续。错误 origin/cookie 仍拒绝，不能伪装为 reset。
 
-页面到期或确定不能恢复时，清理 AI、extension tools、reader 与未完成 commit，已发布数据不撤销。新 session 使旧文件资源失效：浏览器 numeric handles 单调分配并映射 server ids，旧句柄不能读/关新页同号资源；迟到旧响应也不得登记到新页。冷滑动 projection 不改存储内容，引用按 epoch 校验，缺失滑动记录必须重新打开聊天，不能删 marker 后按完整 payload 保存。Agent 工具仅重建已经确认的声明式注册/启用状态，旧 pending callback 取消；不自动恢复旧 generation、live subscription 或 commit。
+页面到期或确定不能恢复时，清理 AI、extension tools、reader 与未完成 commit，已发布数据不撤销。两个宿主共用 `tt-adapter-extension::tools::AgentExtensionTools` 的页面工具 registry / receipt runtime；浏览器 `PageChannel` 与原生 WebView Channel 各自实现 `ExtensionToolEventSink`，宿主只提供 transport 与触发页面清理，`tt-runtime` 只装配注入的 `ExtensionTools` port。新 session 使旧文件资源失效：浏览器 numeric handles 单调分配并映射 server ids，旧句柄不能读/关新页同号资源；迟到旧响应也不得登记到新页。冷滑动 projection 不改存储内容，引用按 epoch 校验，缺失滑动记录必须重新打开聊天，不能删 marker 后按完整 payload 保存。Agent 工具仅重建已经确认的声明式注册/启用状态，旧 pending callback 取消；不自动恢复旧 generation、live subscription 或 commit。
 
 ## 4. 文件传输与隔离边界
 

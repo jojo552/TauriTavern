@@ -9363,6 +9363,7 @@ dependencies = [
  "tracing",
  "tt-adapter-http",
  "tt-adapter-storage-core",
+ "tt-contracts",
  "tt-domain",
  "tt-ports",
  "url",
@@ -9673,7 +9674,6 @@ name = "tt-runtime"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "serde_json",
  "tokio",
  "tracing",
  "tt-adapter-extension",
@@ -9690,7 +9690,6 @@ dependencies = [
  "tt-contracts",
  "tt-domain",
  "tt-ports",
- "uuid",
 ]
 
 [[package]]
@@ -9718,6 +9717,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tt-adapter-archive",
+ "tt-adapter-extension",
  "tt-adapter-http",
  "tt-adapter-media",
  "tt-adapter-provider-http",

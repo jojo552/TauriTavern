@@ -373,7 +373,10 @@ mod tests {
         assert!(service.upload_user_file("payload.JS", "").await.is_err());
         assert!(service.upload_user_file("../notes.txt", "").await.is_err());
         for name in ["trailing.", "CON.txt", &"x".repeat(256)] {
-            assert!(matches!(service.upload_user_file(name, "").await, Err(DomainError::InvalidData(_))));
+            assert!(matches!(
+                service.upload_user_file(name, "").await,
+                Err(DomainError::InvalidData(_))
+            ));
         }
         assert_eq!(
             *store.writes.lock().expect("writes lock"),

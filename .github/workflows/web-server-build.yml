@@ -52,17 +52,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Record Rust formatting corrections
-        run: |
-          cargo fmt --manifest-path src-tauri/Cargo.toml --all
-          git diff -- src-tauri > rustfmt.patch
-
-      - name: Upload formatting review
-        uses: actions/upload-artifact@v7
-        with:
-          name: rustfmt-review
-          path: rustfmt.patch
-          retention-days: 1
+      - name: Check Rust formatting without modifying the checkout
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
       - name: Run checks and tests
         run: pnpm run check
