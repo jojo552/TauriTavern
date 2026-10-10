@@ -314,12 +314,7 @@ export function activateApiConnectionsSubtreeGates({ manager: nextManager }) {
         includeAll: true,
     });
 
-    manager.reconcile();
-
-    if (selectedMainApi === 'openai') {
-        openaiSourceGate.apply(currentSelectValue('chat_completion_source') || 'openai');
-    }
-    if (selectedMainApi === 'textgenerationwebui') {
-        textgenTypeGate.apply(currentSelectValue('textgen_type') || '');
-    }
+    // Initial activation must hydrate and match the selected source exactly like a provider change,
+    // including custom protocol variants whose selector value differs from their data-source.
+    handleMainApiChange(selectedMainApi);
 }

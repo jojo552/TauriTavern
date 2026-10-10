@@ -168,6 +168,8 @@ Panel Runtime 会在 `APP_READY` 后安装，用于在抽屉关闭时把部分�
 
 已知兼容点：
 
+- API 连接面板首次激活与主 API 切换共用 `handleMainApiChange`：自定义来源的协议选项（如 `custom_claude_messages`）先归一到表单的 `data-source="custom"`，再决定停放哪些字段；首次打开无需切换来源才能恢复字段。
+
 - `src/tauri/main/adapters/panel-runtime/extensions-subtree-gates.js`
   - 当前对扩展设置容器启用“子树 gate + park/hydrate”
   - **白名单永远保持连接**：`regex_container`、`qr_container`

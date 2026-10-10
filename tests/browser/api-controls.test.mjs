@@ -61,6 +61,50 @@ test('API presets, Select2 activation and key failures preserve their public beh
             source.select2('destroy');
         });
 
+        await context.test('parking a saved Custom source preserves its fields before and after source changes', async () => {
+            const openai = getModule('scripts/openai.js').namespace;
+            const gates = (await load('tauri/main/adapters/panel-runtime/api-connections-subtree-gates.js')).namespace;
+            const { createEmbeddedRuntimeManager } = (await load('tauri/main/services/embedded-runtime/embedded-runtime-manager.js')).namespace;
+            const { resolvePanelRuntimeProfile } = (await load('tauri/main/services/panel-runtime/panel-runtime-profiles.js')).namespace;
+
+            // Gate listeners precede application handlers, as in host bootstrap. Loading saved
+            // settings projects the form once; APP_READY then activates parking without a change.
+            gates.preinstallApiConnectionsSubtreeGates();
+            openai.initOpenAI();
+            const saved = {
+                ...structuredClone(openai.oai_settings),
+                chat_completion_source: 'custom', custom_api_format: 'claude_messages',
+                custom_url: 'https://custom.example', custom_model: 'saved-custom-model',
+            };
+            openai.loadOpenAISettings({ openai_setting_names: ['Saved'], openai_settings: [JSON.stringify(saved)] }, saved);
+            $('#main_api').val('openai');
+            const fields = ['custom_api_url_text', 'custom_model_id', 'api_key_custom']
+                .map(id => window.document.getElementById(id));
+            const manager = createEmbeddedRuntimeManager({ profile: resolvePanelRuntimeProfile('compat') });
+            gates.activateApiConnectionsSubtreeGates({ manager });
+
+            const assertCustomFields = () => {
+                for (const field of fields) {
+                    assert.equal(window.document.getElementById(field.id), field, field.id + ' must remain reachable');
+                    assert.equal(field.isConnected, true);
+                    assert.equal(window.document.getElementById('custom_form').contains(field), true);
+                }
+                assert.equal($('#custom_api_url_text').val(), saved.custom_url);
+                assert.equal($('#custom_model_id').val(), saved.custom_model);
+            };
+            assertCustomFields();
+            for (const source of ['custom_openai_responses', 'custom_gemini_generate_content', 'custom_gemini_interactions', 'custom']) {
+                $('#chat_completion_source').val(source).trigger('change');
+                assertCustomFields();
+            }
+            $('#chat_completion_source').val('openai').trigger('change');
+            assert.equal(fields.every(field => !field.isConnected), true);
+            $('#chat_completion_source').val('custom_claude_messages').trigger('change');
+            assertCustomFields();
+            // The following key test exercises the ordinary OpenAI form.
+            $('#chat_completion_source').val('openai').trigger('change');
+        });
+
         await context.test('a saved key rejects on refresh failure and clears the input to avoid a duplicate write', async () => {
             const secrets = getModule('scripts/secrets.js').namespace;
             $('#api_key_openai').val('TEST-ONLY');
