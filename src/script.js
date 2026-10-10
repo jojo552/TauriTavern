@@ -901,8 +901,8 @@ async function getClientVersion() {
         displayVersion = `TauriTavern ${tauriVersion || 'UNKNOWN'}`;
         currentVersion = tauriVersion || '0.0.0';
 
-        if (data.gitRevision && data.gitBranch) {
-            displayVersion += ` '${data.gitBranch}' (${data.gitRevision})`;
+        if (data.gitRevision) {
+            displayVersion += ` · ${String(data.gitRevision).slice(0, 8)}`;
         }
 
         $('#version_display').text(displayVersion);
