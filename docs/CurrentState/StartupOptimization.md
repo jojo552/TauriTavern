@@ -118,6 +118,9 @@
 行为覆盖见 [quick-reply-startup.test.mjs](../../tests/browser/quick-reply-startup.test.mjs)：实际 feature `init()` 验证启动不重复请求、空数组消费、消费/丢弃后 fresh 读取、迁移与前向 context links，以及 HTTP/解析/非法 snapshot 错误传播。
 
 完整快照读取、域错误上下文和 DTO 组装集中在应用层 [bootstrap_metadata.rs](../../src-tauri/crates/tt-application/src/services/bootstrap_metadata.rs)；[原生命令](../../src-tauri/crates/tauritavern/src/presentation/commands/bootstrap_commands.rs) 与浏览器宿主只传入同一组服务并映射边界错误。
+### 4.2 统一启动失败提示
+
+启动失败只有两个出口：入口模块加载/宿主就绪失败，以及 `firstLoadInit()` 抛错。两处共用低依赖的 `src/startup-error.js`，移除开屏，显示不可关闭的独立失败页面（错误、阶段与调用栈，可复制或手动重载）。提示内容在 Shadow DOM 中渲染，不受主题与自定义 CSS 影响。复制按钮点击时才载入 clipboard bridge，避免 UI 或宿主模块加载失败时连错误提示也不可用；复制失败明确显示错误。原始启动错误仍记录，主程序失败继续抛出。
 
 ---
 
@@ -192,6 +195,7 @@ Panel Runtime 会在 `APP_READY` 后安装，用于在抽屉关闭时把部分�
 - 运行时提示：
   - 开屏的阶段文字与百分比即启动状态；`APP_READY` 之后的延后工作完成（失败也不阻塞）时 `finishBootSplash()` 淡出并移除开屏，记 `tt:startup:complete`。上游 `hideLoader()` 仍可在首启引导等场景提前移除开屏。
 - `pnpm run test:browser` 构建 vendor bundle 并运行 `tests/browser/*.test.mjs`。其中 `startup-order.test.mjs` 验证 Host-ready 模块先加载时主应用仍能正常初始化、早到的事件等待应用就绪后呈现。该测试组包含在 `pnpm test` 和 `pnpm run check` 中。
+
 
 ---
 

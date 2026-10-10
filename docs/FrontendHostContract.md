@@ -222,11 +222,10 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
 
 ### 4.2 未命中行为（Public）
 
-- `fetch`：未命中路由直接透传原生 fetch。
-- `ajax`：未命中路由直接透传原始 `$.ajax`。
-- 命中但无 handler：返回 `404` JSON（`{ error: "Unsupported endpoint: ..." }`）。
+- `/api/*` 整个命名空间由宿主接管：未实现的端点（任意 method）与未返回响应的 handler 都返回 `404` JSON（`{ error: "Unsupported endpoint: <path>" }`，`statusText` 同为该文本）。开发态与生产态一致。
+- 其余未命中路由的请求：`fetch` 透传原生 fetch，`ajax` 透传原始 `$.ajax`。
 
-> 这类行为会被上游与第三方依赖：不要改成 silent fail/空响应。
+> 这类行为会被上游与第三方依赖：不要改成 silent fail/空响应。生产资产协议会把缺失路径回退为 `200 index.html`，因此 `/api/*` 不得透传。
 
 ### 4.3 路由表（Public）
 
@@ -342,11 +341,11 @@ TauriTavern 第一方功能统一调用 bridge 的 `writeClipboardText()`。原�
 
 ### 5.3 Dialog 兼容（Public in practice）
 
-> 目的：补齐 iOS/macOS（WKWebView）下脚本生态高频依赖的“浏览器内置弹窗语义”，避免出现“点击后完全无反应”。
+> 目的：保持脚本生态依赖的浏览器内置弹窗语义，用户作出选择后脚本才继续执行。
 
-- iOS/macOS：`window.alert/confirm/prompt` 必须可用且不会挂死（无法展示 UI 时返回 Cancel/默认值并记录错误，不做 silent noop）
+- 所有平台的 `window.alert/confirm/prompt` 由 WebView 原生实现，保持同步语义。宿主不安装 JS 替代实现：dialog 插件注册时不带它替换 `alert/confirm` 的脚本，因此也不授予 `dialog:allow-message`。
+- iOS/macOS 由 [WKUIDelegate 桥](../src-tauri/crates/tauritavern/src/infrastructure/apple_webview_js_dialogs.rs) 展示；无法展示 UI 时返回 Cancel/默认值并记录错误，不能挂死或 silent noop。
 - 若运行环境缺失 `HTMLDialogElement.prototype.showModal`：宿主会安装 `dialog-polyfill` 并覆盖主窗口 + same-origin iframe/window（仅在缺失时启用）
-- 实施细节与边界：见 `docs/WkWebViewJsDialogBridgePlan.md`
 
 ### 5.4 外链打开与 `window.open()`（Public in practice）
 
