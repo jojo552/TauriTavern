@@ -3,6 +3,7 @@
 import { isWebHost } from './scripts/util/host-identity.js';
 import { showStartupError } from './startup-error.js';
 import { setBootProgress } from './boot-splash.js';
+import { loadLocaleData, t } from './scripts/i18n.js';
 
 const IS_WEB_HOST = isWebHost();
 // Native hosts can inject bridge internals after this module. Web never claims that runtime.
@@ -269,6 +270,11 @@ async function initializeApplication() {
     if (PERF_ENABLED) {
         safePerfMark('tt:init:start');
     }
+
+    // The locale fetch runs alongside the module imports below, so the splash is labelled in the
+    // user's language almost at once. Startup's initLocales awaits the same fetch and reports a
+    // failure there; here a failure only leaves the label empty.
+    loadLocaleData().then(() => setBootProgress(0, t`Starting: loading the application…`), () => {});
 
     try {
         if (PERF_ENABLED) {

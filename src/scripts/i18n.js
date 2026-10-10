@@ -331,9 +331,25 @@ function addLanguagesToDropdown() {
     }
 }
 
+/** @type {Promise<void>|null} */
+let localeDataLoad = null;
+
+/**
+ * Fetches the language list and the current locale's data, once. Startup starts this before the
+ * application modules load so the boot splash speaks the user's language early; initLocales
+ * awaits the same fetch.
+ * @returns {Promise<void>}
+ */
+export function loadLocaleData() {
+    localeDataLoad ??= (async () => {
+        langs = await fetch('/locales/lang.json').then(response => response.json());
+        localeData = await getLocaleData(localeFile);
+    })();
+    return localeDataLoad;
+}
+
 export async function initLocales() {
-    langs = await fetch('/locales/lang.json').then(response => response.json());
-    localeData = await getLocaleData(localeFile);
+    await loadLocaleData();
     document.documentElement.lang = localeFile;
     applyLocale();
     addLanguagesToDropdown();

@@ -39,6 +39,7 @@
     2) `./tauri-main.js`（安装 Host Kernel：路由/拦截器/ABI）
     3) `./script.js`（SillyTavern 主前端）
   - 每个模块阶段完成后推进开屏进度（`src/boot-splash.js` 的 `setBootProgress`，零依赖，进度只增不减）。
+  - 入口即开始获取语言数据（`i18n.js` 的 `loadLocaleData`，与模块 import 并行），到达后开屏显示本地化的“加载应用”文字；`script.js` 中 `initLocales()` 等待同一次获取，失败在那里进入启动失败面板。
   - 重试的目的仅是提高 Android WebView 首启 I/O 抖动时的模块加载确定性。任何早期模块或宿主就绪失败都显示共同的启动失败面板，移除开屏、停止初始化，只提供手动重载，不静默继续。
 
 ### 2.3 Host Kernel：把同源 /api 变成可路由端点
