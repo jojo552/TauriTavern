@@ -139,7 +139,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ios_policy: ios_policy.clone(),
         max_commit_frame_bytes: 4 * 1024 * 1024,
     };
-    let llm_api_logs = Arc::new(LlmApiLogStore::new(tokio::runtime::Handle::current(), log_root));
+    let llm_api_logs = Arc::new(LlmApiLogStore::new(
+        tokio::runtime::Handle::current(),
+        log_root,
+    ));
     llm_api_logs.apply_settings(startup_settings.dev.effective_llm_api_keep());
     let bundled_resources = Arc::new(DirectoryBundledResources::new(resource_root));
     let extension_tools = Arc::new(tt_adapter_extension::tools::AgentExtensionTools::default());

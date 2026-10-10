@@ -620,7 +620,10 @@ async fn host_command(
         }
         "devlog_get_llm_api_log_index" => {
             let limit: Option<u32> = arg(args, "limit")?;
-            to_json(host.llm_api_logs.tail_index(limit.unwrap_or(50).max(1) as usize))
+            to_json(
+                host.llm_api_logs
+                    .tail_index(limit.unwrap_or(50).max(1) as usize),
+            )
         }
         "devlog_get_llm_api_log_preview" => {
             let id: u64 = arg(args, "id")?;

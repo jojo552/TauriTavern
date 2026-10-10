@@ -93,7 +93,10 @@ impl DevObservabilityHub {
 
     pub fn set_backend_stream_enabled(&self, enabled: bool) {
         let logs = &self.backend_logs;
-        self.backend_stream.set(enabled, &self.app_handle, BACKEND_LOG_EVENT, || logs.subscribe());
+        self.backend_stream
+            .set(enabled, &self.app_handle, BACKEND_LOG_EVENT, || {
+                logs.subscribe()
+            });
     }
 
     pub fn tail_backend_logs(&self, limit: usize) -> Vec<BackendLogEntryDto> {
@@ -106,7 +109,10 @@ impl DevObservabilityHub {
 
     pub fn set_llm_api_stream_enabled(&self, enabled: bool) {
         let logs = &self.llm_api_logs;
-        self.llm_api_stream.set(enabled, &self.app_handle, LLM_API_LOG_EVENT, || logs.subscribe());
+        self.llm_api_stream
+            .set(enabled, &self.app_handle, LLM_API_LOG_EVENT, || {
+                logs.subscribe()
+            });
     }
 
     pub fn apply_llm_api_log_retention(&self, keep: u32) {

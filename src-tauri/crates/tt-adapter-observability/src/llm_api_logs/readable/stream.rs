@@ -11,9 +11,7 @@ pub(in crate::llm_api_logs) struct StreamReadableCollector {
 }
 
 impl StreamReadableCollector {
-    pub(in crate::llm_api_logs) fn new(
-        source: ChatCompletionSource,
-    ) -> Self {
+    pub(in crate::llm_api_logs) fn new(source: ChatCompletionSource) -> Self {
         Self {
             source,
             text_buffer: String::new(),

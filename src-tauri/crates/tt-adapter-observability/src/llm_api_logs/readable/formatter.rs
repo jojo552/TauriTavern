@@ -682,9 +682,7 @@ fn append_gemini_part(out: &mut String, part: &Value) {
     append_block_json(out, part);
 }
 
-pub(in crate::llm_api_logs) fn format_response_readable(
-    response: &Value,
-) -> String {
+pub(in crate::llm_api_logs) fn format_response_readable(response: &Value) -> String {
     if response.get("choices").is_some() {
         return format_openai_response(response);
     }

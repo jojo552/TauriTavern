@@ -96,8 +96,24 @@ mod tests {
         let mut stream_b = b.attach(None).unwrap();
         let logs_a = PageLogStreams::default();
         let logs_b = PageLogStreams::default();
-        logs_a.backend.set(true, || sender.subscribe(), a.clone(), "tauritavern-backend-log").await;
-        logs_b.backend.set(true, || sender.subscribe(), b.clone(), "tauritavern-backend-log").await;
+        logs_a
+            .backend
+            .set(
+                true,
+                || sender.subscribe(),
+                a.clone(),
+                "tauritavern-backend-log",
+            )
+            .await;
+        logs_b
+            .backend
+            .set(
+                true,
+                || sender.subscribe(),
+                b.clone(),
+                "tauritavern-backend-log",
+            )
+            .await;
         logs_a
             .backend
             .set(
@@ -117,7 +133,12 @@ mod tests {
         }
         logs_a
             .backend
-            .set(false, || sender.subscribe(), a.clone(), "tauritavern-backend-log")
+            .set(
+                false,
+                || sender.subscribe(),
+                a.clone(),
+                "tauritavern-backend-log",
+            )
             .await;
         assert_eq!(sender.receiver_count(), 1);
         sender.send(json!({"id": 2})).unwrap();
@@ -128,11 +149,19 @@ mod tests {
         // A's own marker is the next frame, not B's log.
         a.emit("marker", json!(null)).unwrap();
         let (_, frame) = replay_a.next().await.unwrap().unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&frame).unwrap()["event"], "marker");
+        assert_eq!(
+            serde_json::from_str::<Value>(&frame).unwrap()["event"],
+            "marker"
+        );
         b.close();
         logs_b
             .backend
-            .set(false, || sender.subscribe(), b.clone(), "tauritavern-backend-log")
+            .set(
+                false,
+                || sender.subscribe(),
+                b.clone(),
+                "tauritavern-backend-log",
+            )
             .await;
         assert_eq!(sender.receiver_count(), 0);
         assert_eq!(stream_b.next().await, Ok(None));
@@ -147,10 +176,17 @@ mod tests {
         // Fill the receiver before giving it to the pump; no scheduling guess or timer.
         sender.send(json!({"id": 1})).unwrap();
         sender.send(json!({"id": 2})).unwrap();
-        subscription.set(true, || receiver, bus.clone(), "tauritavern-llm-api-log").await;
+        subscription
+            .set(true, || receiver, bus.clone(), "tauritavern-llm-api-log")
+            .await;
         assert_eq!(stream.next().await, Err(ResumeError::Gap));
         subscription
-            .set(false, || sender.subscribe(), bus.clone(), "tauritavern-llm-api-log")
+            .set(
+                false,
+                || sender.subscribe(),
+                bus.clone(),
+                "tauritavern-llm-api-log",
+            )
             .await;
         assert_eq!(sender.receiver_count(), 0);
         assert!(bus.closed().is_cancelled());

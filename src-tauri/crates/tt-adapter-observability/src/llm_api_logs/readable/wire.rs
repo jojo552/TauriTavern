@@ -6,10 +6,7 @@ use tt_ports::repositories::chat_completion_repository::{
     CHAT_COMPLETION_PROVIDER_STATE_FIELD, ChatCompletionSource,
 };
 
-pub(in crate::llm_api_logs) fn format_endpoint(
-    base_url: &str,
-    endpoint_path: &str,
-) -> String {
+pub(in crate::llm_api_logs) fn format_endpoint(base_url: &str, endpoint_path: &str) -> String {
     let base = base_url.trim().trim_end_matches('/');
     let path = endpoint_path.trim();
     let joined = match (base.is_empty(), path.is_empty()) {
@@ -35,9 +32,7 @@ pub(in crate::llm_api_logs) fn format_endpoint(
     }
 }
 
-pub(in crate::llm_api_logs) fn extract_model(
-    payload: &Value,
-) -> Option<String> {
+pub(in crate::llm_api_logs) fn extract_model(payload: &Value) -> Option<String> {
     payload
         .get("model")
         .and_then(Value::as_str)
@@ -50,9 +45,7 @@ pub(in crate::llm_api_logs) fn pretty_json(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
-pub(in crate::llm_api_logs) fn wire_log_payload(
-    payload: &Value,
-) -> Cow<'_, Value> {
+pub(in crate::llm_api_logs) fn wire_log_payload(payload: &Value) -> Cow<'_, Value> {
     let has_provider_state = payload
         .as_object()
         .is_some_and(|object| object.contains_key(CHAT_COMPLETION_PROVIDER_STATE_FIELD));
