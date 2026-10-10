@@ -12,7 +12,7 @@
 
 已落地的关键点：
 
-- **Shell 先到**：`#preloader` 在 `firstLoadInit()` 的 Shell 阶段就移除，主页可以尽早可见可点。
+- **开屏覆盖完整启动**：`#preloader` 是带 logo 与真实阶段进度条的开屏，覆盖到 APP_READY 之后的延后扩展激活与上次聊天加载完成才淡出，用户进入时界面已完整。启动顺序与 `APP_READY` 语义不变，只是遮罩移除时机后移。
 - **Host Ready 显式等待**：在首次 `/api/*` 访问前等待 `__TAURITAVERN_MAIN_READY__`，确保拦截器/路由已安装，且 Tauri 后端已进入可接收 `AppState` 命令的 readiness 状态。
 - **启动并发读取**：设置与启动元数据并行读取、按顺序应用，并复用本次结果。
 - **扩展启动分层**：扩展发现可提前后台启动；系统扩展仍在 Full 阶段完成，local/global third-party 扩展延后到 `APP_READY` 后串行激活，从启动关键路径移出。
@@ -26,7 +26,7 @@
 ### 2.1 HTML 入口与预加载遮罩
 
 - `src/index.html`
-  - 首屏遮罩：`<div id="preloader"></div>`
+  - 开屏：`#preloader`（logo、进度条、阶段文字），静态写在 HTML 中，首帧即可见、不依赖任何模块；样式在 `css/loader.css`。不透明背景且只动画 transform/opacity，不做全屏 blur；`prefers-reduced-motion` 时停止装饰动画。
   - 模块入口：`<script type="module" src="init.js"></script>`
   - 约束：不使用 modulepreload（移动端 WebView 上曾有缓存/预加载失败问题）。
 
@@ -38,7 +38,8 @@
     1) `./lib.js`（静态依赖 `src/dist/lib.core.bundle.js`）
     2) `./tauri-main.js`（安装 Host Kernel：路由/拦截器/ABI）
     3) `./script.js`（SillyTavern 主前端）
-  - 重试的目的仅是提高 Android WebView 首启 I/O 抖动时的模块加载确定性。任何早期模块或宿主就绪失败都显示共同的启动失败面板，移除 preloader、停止初始化，只提供手动重载，不静默继续。
+  - 每个模块阶段完成后推进开屏进度（`src/boot-splash.js` 的 `setBootProgress`，零依赖，进度只增不减）。
+  - 重试的目的仅是提高 Android WebView 首启 I/O 抖动时的模块加载确定性。任何早期模块或宿主就绪失败都显示共同的启动失败面板，移除开屏、停止初始化，只提供手动重载，不静默继续。
 
 ### 2.3 Host Kernel：把同源 /api 变成可路由端点
 
@@ -58,7 +59,7 @@
 - `src/script.js:firstLoadInit()`
   - **Shell 阶段**
     - `initLocales()` 先于任何可见界面：语言数据是静态资源，不依赖 Host 就绪；首帧界面与启动状态文案都已是用户语言
-    - `removePreloader()`（`src/scripts/loader.js`）：移除 `#preloader`
+    - 各阶段通过 `setStage(stage, message, progress)` 推进开屏进度并更新阶段文字
     - 初始化纯前端 UI/DOM handler、基础 patch（不会做 `/api/*`）
   - **Core 阶段**
     - `await waitForTauriMainReady({ failFast: true })`：保证 Host 拦截器与 Rust backend readiness 就绪
@@ -186,7 +187,7 @@ Panel Runtime 会在 `APP_READY` 后安装，用于在抽屉关闭时把部分�
   - `src/tauri/main/bootstrap.js`：`tt:tauri:*`
   - `src/script.js`：`tt:startup:shell/core/full` + `tt:startup:ready`
 - 运行时提示：
-  - `src/scripts/tauri/startup/startup-status-overlay.js`：右下角非阻塞启动状态 overlay（`APP_READY` 后移除）
+  - 开屏的阶段文字与百分比即启动状态；`APP_READY` 之后的延后工作完成（失败也不阻塞）时 `finishBootSplash()` 淡出并移除开屏，记 `tt:startup:complete`。上游 `hideLoader()` 仍可在首启引导等场景提前移除开屏。
 - `pnpm run test:browser` 构建 vendor bundle 并运行 `tests/browser/*.test.mjs`。其中 `startup-order.test.mjs` 验证 Host-ready 模块先加载时主应用仍能正常初始化、早到的事件等待应用就绪后呈现。该测试组包含在 `pnpm test` 和 `pnpm run check` 中。
 
 ---
@@ -195,7 +196,7 @@ Panel Runtime 会在 `APP_READY` 后安装，用于在抽屉关闭时把部分�
 
 支持：
 
-- 主页尽早可见可点（Shell 先到）。
+- 开屏覆盖整个启动并显示真实阶段进度，全部加载完成后进入完整主界面。
 - `APP_READY` 表示主应用已可交互；late-loaded third-party 扩展依赖其 auto-fire 语义继续完成初始化。
 - third-party 扩展资源同源加载，并提供 `window._`（lodash）与 `window.hljs` 兼容（见上）。
 

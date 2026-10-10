@@ -1,19 +1,150 @@
+/* Boot splash: the page's initial cover (index.html #preloader), owned by startup through
+   src/boot-splash.js. It is opaque instead of blurring the page behind it, and only transform and
+   opacity animate, so the compositor does the work while the application loads underneath. */
 #preloader {
+    --tt-boot-progress: 0.04;
+    --tt-boot-teal: #22b6c6;
+    --tt-boot-gold: #f5bb2b;
     position: fixed;
-    margin: 0;
-    padding: 0;
-    top: 0;
-    left: 0;
-    z-index: 999999;
-    width: 100vw;
-    height: 100vh;
-    width: 100dvw;
-    height: 100dvh;
-    background-color: var(--SmartThemeBlurTintColor);
-    color: var(--SmartThemeBodyColor);
-    /*for some reason the full screen blur does not work on iOS*/
-    backdrop-filter: blur(30px);
-    opacity: 1;
+    inset: 0;
+    /* Below #toast-container (999999) so startup notices stay readable. */
+    z-index: 999998;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(20px, 5vh, 40px);
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+    background: #161718;
+    color: rgb(220, 220, 210);
+    font: 13px/1.4 "Noto Sans", sans-serif;
+    contain: strict;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: opacity 400ms ease, transform 400ms ease;
+}
+
+html.tt-oled-background #preloader {
+    background: #000;
+}
+
+#preloader.tt-boot-splash--done {
+    opacity: 0;
+    transform: scale(1.04);
+    pointer-events: none;
+}
+
+.tt-boot-splash__glow {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: min(110vmin, 760px);
+    aspect-ratio: 1;
+    margin: calc(min(110vmin, 760px) / -2) 0 0 calc(min(110vmin, 760px) / -2);
+    border-radius: 50%;
+    background: radial-gradient(circle, rgb(34 182 198 / 0.20) 0%, rgb(245 187 43 / 0.08) 42%, transparent 68%);
+    pointer-events: none;
+    animation: tt-boot-glow 4.5s ease-in-out infinite alternate;
+}
+
+.tt-boot-splash__logo {
+    position: relative;
+    width: min(58vmin, 260px);
+    height: auto;
+    -webkit-user-drag: none;
+    animation: tt-boot-enter 650ms cubic-bezier(0.22, 1, 0.36, 1) both,
+        tt-boot-float 3.4s ease-in-out 650ms infinite;
+}
+
+.tt-boot-splash__progress {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: min(70vw, 300px);
+    animation: tt-boot-fade-in 650ms ease-out 150ms both;
+}
+
+.tt-boot-splash__track {
+    position: relative;
+    height: 6px;
+    border-radius: 999px;
+    background: rgb(255 255 255 / 0.10);
+    overflow: hidden;
+}
+
+/* A full-width bar slides in from the left: translateX keeps its rounded end undistorted. */
+.tt-boot-splash__bar {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--tt-boot-teal), var(--tt-boot-gold));
+    transform: translateX(calc((var(--tt-boot-progress) - 1) * 100%));
+    transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
+    overflow: hidden;
+}
+
+/* Shows that a long stage is still working without pretending the stage has advanced. */
+.tt-boot-splash__bar::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.55), transparent);
+    transform: translateX(-100%);
+    animation: tt-boot-shimmer 1.8s ease-in-out infinite;
+}
+
+.tt-boot-splash__status {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: rgb(220 220 210 / 0.65);
+    font-variant-numeric: tabular-nums;
+}
+
+.tt-boot-splash__text {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+@keyframes tt-boot-enter {
+    from { opacity: 0; transform: translateY(12px) scale(0.92); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes tt-boot-float {
+    0%, 100% { transform: none; }
+    50% { transform: translateY(-8px); }
+}
+
+@keyframes tt-boot-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes tt-boot-glow {
+    from { opacity: 0.55; transform: scale(0.94); }
+    to { opacity: 1; transform: scale(1.04); }
+}
+
+@keyframes tt-boot-shimmer {
+    to { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tt-boot-splash__glow,
+    .tt-boot-splash__logo,
+    .tt-boot-splash__progress,
+    .tt-boot-splash__bar::after {
+        animation: none;
+    }
+
+    .tt-boot-splash__bar {
+        transition: none;
+    }
 }
 
 #loader {

@@ -33,7 +33,7 @@ const puppeteer = require('puppeteer-core');
         });
         page.on('pageerror', error => failures.push(String(error).slice(0, 300)));
         await page.goto(base + '/', { waitUntil: 'domcontentloaded', timeout: 90000 });
-        await page.waitForFunction(() => window.TavernHelper && !document.querySelector('#tt-startup-status-overlay') && window.__probeEvents.length > 0, { timeout: 180000 });
+        await page.waitForFunction(() => window.TavernHelper && !document.querySelector('#preloader') && window.__probeEvents.length > 0, { timeout: 180000 });
         assert.equal(settingsReads, 1, 'Quick Reply must reuse the one startup settings snapshot');
         const beforeEpoch = await page.evaluate(async () => (await import('/tauri-bridge.js')).hostSessionEpoch());
         const session = currentSession;

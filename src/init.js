@@ -2,6 +2,7 @@
 
 import { isWebHost } from './scripts/util/host-identity.js';
 import { showStartupError } from './startup-error.js';
+import { setBootProgress } from './boot-splash.js';
 
 const IS_WEB_HOST = isWebHost();
 // Native hosts can inject bridge internals after this module. Web never claims that runtime.
@@ -286,6 +287,7 @@ async function initializeApplication() {
             safePerfMark('tt:init:import:lib:start');
         }
         await importWithRetry('./lib.js');
+        setBootProgress(0.12);
         if (PERF_ENABLED) {
             safePerfMark('tt:init:import:lib:end');
             safePerfMeasure('tt:init:import:lib', 'tt:init:import:lib:start', 'tt:init:import:lib:end');
@@ -297,6 +299,7 @@ async function initializeApplication() {
         if (IS_WEB_HOST) await import('./tauri-main.js');
         else await importWithRetry('./tauri-main.js');
         if (IS_WEB_HOST) await window.__TAURITAVERN_MAIN_READY__;
+        setBootProgress(0.2);
         if (PERF_ENABLED) {
             safePerfMark('tt:init:import:tauri-main:end');
             safePerfMeasure('tt:init:import:tauri-main', 'tt:init:import:tauri-main:start', 'tt:init:import:tauri-main:end');
@@ -306,6 +309,7 @@ async function initializeApplication() {
             safePerfMark('tt:init:import:app:start');
         }
         await importWithRetry('./script.js');
+        setBootProgress(0.3);
         if (PERF_ENABLED) {
             safePerfMark('tt:init:import:app:end');
             safePerfMeasure('tt:init:import:app', 'tt:init:import:app:start', 'tt:init:import:app:end');

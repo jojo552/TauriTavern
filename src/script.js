@@ -349,7 +349,8 @@ import {
     isPersonaPanelOpen,
 } from './scripts/personas.js';
 import { getBackgrounds, initBackgrounds, loadBackgroundSettings, background_settings, prefetchBackgrounds } from './scripts/backgrounds.js';
-import { hideLoader, showLoader, removePreloader } from './scripts/loader.js';
+import { hideLoader, showLoader } from './scripts/loader.js';
+import { finishBootSplash, setBootProgress } from './boot-splash.js';
 import { loader } from './scripts/action-loader.js';
 import { BulkEditOverlay } from './scripts/BulkEditOverlay.js';
 import { initTextGenModels } from './scripts/textgen-models.js';
@@ -406,7 +407,6 @@ import { MacroEnvBuilder } from './scripts/macros/engine/MacroEnvBuilder.js';
 import { MessageFormatter } from './scripts/message-formatter.js';
 import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
-import { createStartupStatusOverlay } from './scripts/tauri/startup/startup-status-overlay.js';
 import { showStartupError } from './startup-error.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 
@@ -1127,13 +1127,14 @@ export function consumeQuickReplyPresetsSnapshot() {
 
 //MARK: firstLoadInit
 async function firstLoadInit() {
-    const startupStatus = createStartupStatusOverlay();
     const perfEnabled = globalThis.__TAURITAVERN_PERF_ENABLED__ === true;
     const perfMark = (name) => perfEnabled && globalThis.performance?.mark?.(name);
 
-    const setStage = (stage, message) => {
+    // The boot splash covers startup until everything has loaded; each stage reports how much of
+    // startup it completes, so the bar reflects real work rather than elapsed time.
+    const setStage = (stage, message, progress) => {
         globalThis.__TAURITAVERN_STARTUP_STAGE__ = stage;
-        startupStatus.setText(message);
+        setBootProgress(progress, message);
         perfMark(`tt:startup:${stage}`);
     };
 
@@ -1145,8 +1146,7 @@ async function firstLoadInit() {
 
     try {
         await initLocales();
-        setStage('shell', t`Starting: rendering the interface… (extensions load later)`);
-        removePreloader();
+        setStage('shell', t`Starting: preparing the interface…`, 0.34);
         await nextPaint();
 
         registerPromptManagerMigration();
@@ -1159,7 +1159,7 @@ async function firstLoadInit() {
         applyBrowserFixes();
 
         // Ensure bridge/interceptors are installed before first /api/* calls.
-        setStage('core', t`Starting: connecting to the backend…`);
+        setStage('core', t`Starting: connecting to the backend…`, 0.4);
         await hostReadyPromise;
         const tauriTavernSettings = await getTauriTavernSettings();
         initializeChatVirtualization(tauriTavernSettings);
@@ -1181,7 +1181,7 @@ async function firstLoadInit() {
             fetchSettingsSnapshot(),
         ]);
 
-        setStage('core', t`Starting: loading core data…`);
+        setStage('core', t`Starting: loading core data…`, 0.48);
         const clientVersionPromise = getClientVersion();
         const [[bootstrapMetadata, settingsSnapshot]] = await Promise.all([
             startupDataPromise,
@@ -1213,7 +1213,7 @@ async function firstLoadInit() {
         initNovelAISettings();
         initSystemPrompts();
 
-        setStage('full', t`Starting: loading extensions and optional modules…`);
+        setStage('full', t`Starting: loading extensions and optional modules…`, 0.6);
         initExtensions();
         initExtensionSlashCommands();
         ToolManager.initToolSlashCommands();
@@ -1230,6 +1230,7 @@ async function firstLoadInit() {
         initBookmarks();
         primeUserAvatarsSnapshot(bootstrapMetadata.avatars);
         await getUserAvatars(true, user_avatar);
+        setBootProgress(0.7, t`Starting: loading characters…`);
         const appliedCharacters = await applyCharactersSnapshot(bootstrapMetadata.characters);
         if (!appliedCharacters) {
             return;
@@ -1263,6 +1264,7 @@ async function firstLoadInit() {
 
         let deferThirdPartyExtensions = false;
         if (extensionsEnabled) {
+            setBootProgress(0.8, t`Starting: activating extensions…`);
             await extensionsDiscoveryPromise;
             const enableAutoUpdate = Boolean(settingsSnapshot?.enable_extensions_auto_update);
             const isVersionChanged = settings.currentVersion !== currentVersion;
@@ -1302,11 +1304,12 @@ async function firstLoadInit() {
         await eventSource.emit(event_types.APP_INITIALIZED);
         await fixViewport();
         await eventSource.emit(event_types.APP_READY);
-
-        startupStatus.remove();
         perfMark('tt:startup:ready');
+        setBootProgress(0.88, t`Starting: loading extensions and the last chat…`);
 
-        void (async () => {
+        // Startup ordering is unchanged: these still run after APP_READY. The splash now waits for
+        // them, so the first view the user sees has its extensions and last chat in place.
+        const postReady = (async () => {
             await nextPaint();
             await initTokenizers();
             await nextPaint();
@@ -1327,6 +1330,13 @@ async function firstLoadInit() {
                 }
             }
         })();
+        // Work after APP_READY never failed startup; a failure there still reveals the interface.
+        const [postReadyResult] = await Promise.allSettled([postReady, initialChatLoad]);
+        perfMark('tt:startup:complete');
+        finishBootSplash();
+        if (postReadyResult.status === 'rejected') {
+            console.error('TauriTavern: Post-ready startup work failed:', postReadyResult.reason);
+        }
 
     } catch (error) {
         console.error('TauriTavern: Application startup failed:', error);
@@ -1335,7 +1345,6 @@ async function firstLoadInit() {
     } finally {
         // Disabled, unavailable or failed quick-reply activation must not retain startup data.
         primeQuickReplyPresetsSnapshot(null);
-        startupStatus.remove();
     }
 }
 
