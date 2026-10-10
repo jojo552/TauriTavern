@@ -65,7 +65,8 @@ jobs:
     # Production runs Debian 12 (glibc 2.36); link against the same libc.
     container: debian:bookworm
     env:
-      TAURITAVERN_BUILD_REVISION: ${{ github.sha }}
+      TAURITAVERN_GIT_REVISION: ${{ github.sha }}
+      TAURITAVERN_GIT_BRANCH: ${{ github.ref_name }}
     outputs:
       name: ${{ steps.package.outputs.name }}
     steps:
@@ -107,6 +108,7 @@ jobs:
           name="tt-server-linux-x64-${sha12}"
           node scripts/package-web-server.mjs src-tauri/target/server/tt-server "release/$name"
           echo "$GITHUB_SHA" > "release/$name/SOURCE_COMMIT"
+          node scripts/verify-web-server.mjs "release/$name" "$GITHUB_SHA" "$GITHUB_REF_NAME"
           (cd "release/$name" && sha256sum tt-server > RELEASE_SHA256SUMS)
           tar -C release -czf "release/$name.tar.gz" "$name"
           (cd release && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
