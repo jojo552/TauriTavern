@@ -1,6 +1,6 @@
 // @ts-check
 
-import { invoke, listen, isProjectHost } from '../../../tauri-bridge.js';
+import { invoke as hostInvoke, listen as hostListen, isProjectHost, onHostSessionReset } from '../../../tauri-bridge.js';
 
 const TAURI_BACKEND_ERROR_EVENT = 'tauritavern-backend-error';
 const FRONTEND_BACKEND_ERROR_EVENT = 'tauritavern:backend-error';
@@ -43,17 +43,42 @@ function publishBackendError(payload) {
     window[BACKEND_ERROR_QUEUE_KEY] = queuedErrors;
 }
 
-export async function installBackendErrorBridge() {
+/**
+ * @param {{
+ *   invoke?: (command: string) => Promise<unknown>;
+ *   listen?: (event: string, handler: (event: { payload: unknown }) => void) => Promise<() => void>;
+ *   sessionReset?: (handler: () => Promise<void>) => () => void;
+ * }} deps
+ */
+export async function installBackendErrorBridge({
+    invoke = hostInvoke,
+    listen = hostListen,
+    sessionReset = onHostSessionReset,
+} = {}) {
     if (!isProjectHost()) return;
 
-    await listen(TAURI_BACKEND_ERROR_EVENT, (event) => {
+    const stopListening = await listen(TAURI_BACKEND_ERROR_EVENT, (event) => {
         publishBackendError(event?.payload);
     });
 
-    const pendingErrors = await invoke('backend_error_bridge_ready');
-    if (Array.isArray(pendingErrors)) {
-        for (const payload of pendingErrors) {
-            publishBackendError(payload);
+    async function declareReady() {
+        const pendingErrors = await invoke('backend_error_bridge_ready');
+        if (Array.isArray(pendingErrors)) {
+            for (const payload of pendingErrors) {
+                publishBackendError(payload);
+            }
         }
+    }
+
+    let stopReset;
+    try {
+        // Listeners survive a replaced browser session. Declare readiness on its new page,
+        // not on a short SSE reconnect, and let the transport report reset-handler failures.
+        stopReset = sessionReset(declareReady);
+        await declareReady();
+    } catch (error) {
+        stopReset?.();
+        stopListening();
+        throw error;
     }
 }

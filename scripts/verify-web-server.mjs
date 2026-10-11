@@ -64,6 +64,9 @@ async function readReady() {
 try {
     // Every operation after mkdtemp is covered by cleanup, including password/setup/spawn failures.
     await fs.writeFile(path.join(root, 'password'), password, { mode: 0o600 });
+    // Exercise the real startup recovery producer, not a test-only error injection endpoint.
+    await fs.mkdir(path.join(root, 'data/default-user/settings'), { recursive: true });
+    await fs.writeFile(path.join(root, 'data/default-user/settings/dynamic-theme.json'), '{invalid synthetic settings');
     server = spawn(path.join(release, 'tt-server'), [
         '--listen', '127.0.0.1:18002', '--public-origin', base,
         '--data-root', path.join(root, 'data'), '--app-root', path.join(root, 'app'),
@@ -98,6 +101,27 @@ try {
     assert.equal(events.status, 200);
     streamReader = events.body.getReader();
     await readReady();
+    const errorReady = await invoke('backend_error_bridge_ready');
+    assert.equal(errorReady.status, 200);
+    assert.deepEqual(await errorReady.json(), [], 'browser pending notifications use SSE, not the HTTP result');
+    const startupError = await readFrame();
+    assert.equal(startupError.event, 'tauritavern-backend-error');
+    assert.ok(Number.isSafeInteger(startupError.id));
+    assert.deepEqual(Object.keys(startupError.payload), ['message'], 'diagnostic fields do not cross the error bridge');
+    assert.ok(startupError.payload.message.includes('dynamic-theme.json'));
+    assert.ok(startupError.payload.message.includes('restoring this settings section to defaults'));
+    assert.deepEqual(await (await invoke('backend_error_bridge_ready')).json(), [], 'ready is idempotent');
+
+    // A swallowed, explicitly user-visible request failure is also delivered without enabling logs.
+    await fs.mkdir(path.join(root, 'data/default-user/groups'), { recursive: true });
+    await fs.writeFile(path.join(root, 'data/default-user/groups/verify-user-error.json'), '{invalid synthetic group');
+    assert.equal((await invoke('clear_group_cache')).status, 200);
+    const groups = await invoke('get_all_groups');
+    assert.equal(groups.status, 200);
+    assert.deepEqual(await groups.json(), []);
+    const liveError = await readFrame();
+    assert.equal(liveError.event, 'tauritavern-backend-error');
+    assert.ok(liveError.payload.message.includes('verify-user-error.json'));
 
     const versionReply = await invoke('get_client_version');
     assert.equal(versionReply.status, 200);
@@ -126,6 +150,7 @@ try {
     assert.equal((await invoke('verify_unknown_command_for_log')).status, 400);
     for (;;) {
         const frame = await readFrame();
+        assert.notEqual(frame.event, 'tauritavern-backend-error', 'ordinary command failures do not become backend error toasts');
         if (frame.type !== 'event' || frame.event !== 'tauritavern-backend-log') continue;
         // The same frame shape the browser transport validates before dispatching to listeners.
         assert.ok(Number.isSafeInteger(frame.id), 'event frames carry a numeric id');
@@ -145,7 +170,7 @@ try {
         headers: { 'content-type': 'application/json', 'x-tt-csrf': session.csrfToken },
         body: JSON.stringify({ sessionId: session.sessionId }) });
     assert.equal(closed.status, 204);
-    console.log('Packaged host verified: identity, authentication, SSE ready, gzip frames, commit reclamation and log panels');
+    console.log('Packaged host verified: identity, authentication, SSE ready, explicit backend errors, gzip frames, commit reclamation and log panels');
 } finally {
     clearTimeout(deadline);
     try {

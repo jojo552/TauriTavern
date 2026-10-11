@@ -144,7 +144,7 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
       - 语义：宿主统一负责历史索引、实时索引流与 keep 设置持久化；调用方不应直接操作 `devlog_*` 命令。
     - `api.dev.exportBundle() -> Promise<boolean>`：生成并交付 debug bundle（zip），返回是否已交付，详见 `docs/API/Dev.md`。
 
-浏览器安装同一个 `api.dev`：前端日志、后端日志 tail/订阅、LLM API 日志索引/预览/原始内容/订阅与 keep 设置均可用，语义与原生一致；实时流按页面订阅，经该页 SSE 交付，页面会话重置后由宿主重新声明仍在使用的订阅，不补发断开期间的条目。debug bundle 导出尚未接入 HTTP host，浏览器不显示该入口，调用 `exportBundle()` 明确拒绝。服务端后台错误当前留在服务端日志，不承诺原生 user-error toast hub 的推送。完整边界见 [BrowserHost](CurrentState/BrowserHost.md)。
+浏览器安装同一个 `api.dev`：前端日志、后端日志 tail/订阅、LLM API 日志索引/预览/原始内容/订阅与 keep 设置均可用，语义与原生一致；实时流按页面订阅，经该页 SSE 交付，页面会话重置后由宿主重新声明仍在使用的订阅，不补发断开期间的条目。debug bundle 导出尚未接入 HTTP host，浏览器不显示该入口，调用 `exportBundle()` 明确拒绝。显式用户错误由独立于日志订阅的共同 backend-error bridge 显示：浏览器经页面 SSE 投递；新页面 session 重新声明 ready，同页短断线沿 cursor 回放。密码保护的单用户宿主向各认证页面投递原生错误文案，不附诊断 fields；这不是多租户隔离或脱敏协议。完整边界见 [BrowserHost](CurrentState/BrowserHost.md)。
 
 `api.dev.*` 的长期契约要求：
 

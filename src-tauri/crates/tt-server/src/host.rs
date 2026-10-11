@@ -77,6 +77,7 @@ pub struct Host {
     pub updates: Arc<tt_application::services::update_service::UpdateService>,
     pub downloads: crate::downloads::Downloads,
     pub archives: Arc<tt_application::services::data_archive_service::DataArchiveService>,
+    pub backend_errors: Arc<crate::backend_errors::BackendErrorHub>,
     pub backend_logs: Arc<BackendLogStore>,
     pub llm_api_logs: Arc<LlmApiLogStore>,
 }
@@ -183,6 +184,7 @@ async fn download(
 async fn create_session(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
     match host.security.create_session(&headers) {
         Ok((session, cookie)) => {
+            host.backend_errors.register_page(&session.id, &session.page.bus);
             let mut response =
                 Json(json!({ "sessionId": session.id, "csrfToken": session.csrf })).into_response();
             response
@@ -259,6 +261,7 @@ fn events_cursor(headers: &HeaderMap, after: Option<u64>) -> Result<Option<u64>,
 
 pub async fn close_session(host: &Host, session: Arc<Session>) {
     host.security.remove_session(&session.id);
+    host.backend_errors.remove_page(&session.id);
     session.page.bus.close();
     host.extension_tools.clear_page(&session.id);
     session.page.ai.close_all(&host.services).await;
@@ -270,6 +273,7 @@ pub async fn close_session(host: &Host, session: Arc<Session>) {
 /// Stop admitting work before starting asynchronous cleanup, even if the response is dropped.
 fn terminate_page(host: Arc<Host>, session: Arc<Session>) {
     host.security.remove_session(&session.id);
+    host.backend_errors.remove_page(&session.id);
     session.page.bus.close();
     host.extension_tools.clear_page(&session.id);
     tokio::spawn(async move { close_session(&host, session).await });
@@ -499,6 +503,11 @@ async fn page_command(
         return Ok(Some(value));
     }
     match command {
+        "backend_error_bridge_ready" => {
+            host.backend_errors.ready(owner)?;
+            // Browser pending errors use the page SSE replay protocol, not an HTTP backlog.
+            to_json(Vec::<String>::new())
+        }
         "register_agent_extension_tool" => {
             let definition: ExtensionToolDefinition = arg(args, "definition")?;
             let channel = session.page.bus.channel(args, "channel")?;
@@ -609,9 +618,8 @@ async fn host_command(
     let services = &host.services;
     match command {
         "is_ready" => to_json(true),
-        // The server is ready before it accepts connections; backend errors stay in its log.
+        // The server is ready before it accepts connections.
         "wait_for_backend_ready" => to_json(()),
-        "backend_error_bridge_ready" => to_json(Vec::<String>::new()),
         // Page console output is mirrored into the server log, as the native host mirrors it into
         // its backend log; this is the only place a browser page's errors become operator-visible.
         "devlog_get_backend_log_tail" => {

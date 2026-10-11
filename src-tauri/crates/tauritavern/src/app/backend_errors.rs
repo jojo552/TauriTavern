@@ -1,17 +1,11 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-
-pub const BACKEND_ERROR_EVENT: &str = "tauritavern-backend-error";
+pub use tt_contracts::observability::BACKEND_ERROR_EVENT;
+use tt_contracts::observability::BackendErrorPayload;
 
 const MAX_PENDING_BACKEND_ERRORS: usize = 50;
-
-#[derive(Clone, Serialize)]
-struct BackendErrorEventPayload {
-    message: String,
-}
 
 pub struct BackendErrorHub {
     app_handle: AppHandle,
@@ -51,7 +45,7 @@ impl BackendErrorHub {
     fn emit(&self, message: String) {
         if let Err(error) = self
             .app_handle
-            .emit(BACKEND_ERROR_EVENT, BackendErrorEventPayload { message })
+            .emit(BACKEND_ERROR_EVENT, BackendErrorPayload { message })
         {
             eprintln!("Failed to emit backend error event: {}", error);
         }

@@ -4,7 +4,7 @@
 
 ## 1. 普通日志链路
 
-Rust 普通日志统一使用 `tracing::{debug, info, warn, error}` 宏，不再经过 `infrastructure::logging::logger` facade。启动期在 `src-tauri/crates/tauritavern/src/infrastructure/logging/tracing_runtime.rs` 安装全局 subscriber：
+Rust 普通日志统一使用 `tracing::{debug, info, warn, error}` 宏，不再经过 `infrastructure::logging::logger` facade。原生在 `src-tauri/crates/tauritavern/src/infrastructure/logging/tracing_runtime.rs`、浏览器在 `tt-server/src/main.rs` 安装全局 subscriber。两宿主复用 `tt-adapter-observability::user_errors::BackendUserErrorLayer` 的用户错误选择，不维护两套 target/visitor 规则：
 
 - 全局 `EnvFilter` 控制所有 tracing event；
 - stdout 与 rolling file 记录普通日志；
@@ -26,13 +26,18 @@ backend error toast 不是普通 error 日志的副作用，而是显式产品�
 
 ## 3. 前端桥接
 
-user-error layer 将消息交给 `app/backend_errors.rs::BackendErrorHub`。前端启动时 `src/tauri/main/bootstrap/backend-error-bridge.js` 先监听 Tauri 事件 `tauritavern-backend-error`，再调用 `backend_error_bridge_ready`：
+共同 user-error layer 只取非空 `message`，不附 tracing fields。事件名与 `{ message }` DTO 在 `tt-contracts::observability`，选择规则在共享 adapter，排队、就绪和投递在各宿主：
 
-1. Rust 侧把 bridge 标记为 ready；
-2. 启动早期排队的 pending backend errors 被 drain 给前端；
-3. 之后的新 backend errors 直接 emit。
+- 原生：`app/backend_errors.rs::BackendErrorHub` 保持原有最多 50 条 early backlog、ready command 返回并 drain 字符串、之后直接 emit 的行为。
+- 浏览器：`tt-server/src/backend_errors.rs::BackendErrorHub` 面向密码保护的单用户服务，将同一显式消息交给各认证页面；原文可能含用户自己的数据名称或路径，这不是公开脱敏 DTO。Startup backlog 在首个页面 ready 前可用；之后新页面不补播旧历史，无页面时不积累离线通知。每页有独立 pending/ready，registry 仅持有弱 PageBus 引用，Security 仍拥有页面生命周期。详见 [BrowserHost](BrowserHost.md)。
 
-如果 ready command 失败，Tauri integration 初始化会 fail-fast，而不是静默禁用 backend error toast。前端 `src/script.js` 最终消费自定义事件 `tauritavern:backend-error` 并展示 toastr。
+共同前端 `src/tauri/main/bootstrap/backend-error-bridge.js` 先 listen `tauritavern-backend-error` 再 invoke `backend_error_bridge_ready`。浏览器 ready 在同一锁内将首批 pending 放入既有页面 SSE，返回空数组而非 HTTP backlog；剩余有界 pending 周期投递。重复 ready 幂等，避免 HTTP ready 响应丢失造成首批消息丢失。新 session 重新声明 ready，同页短断线不重新监听或 drain。
+
+首次 ready 失败清理 listener/reset 注册并让初始化 fail-fast；新 session 的 ready 失败由 transport 现有错误报告显示，不自动重放未知 invoke。前端消费者未安装时仍使用既有最多 50 条队列；`src/script.js` 消费 `tauritavern:backend-error`，按约 1.2 秒窗口去重并以纯文本 toastr 显示，即使扩展改了全局 toastr HTML 选项也不执行错误文案中的 HTML。
+
+浏览器 pending 最多 50 条（省略摘要也占其中一席），重复排队消息合并，溢出淘汰最旧项并显示计数摘要；单条原文最多 2048 UTF-8 字节，超出时安全截断并提示查日志。首次 ready 最多投递 4 帧，之后每秒最多一批 4 帧，错过周期不追赶，不照搬 Dev log 的 Lagged→gap/reset。正常同页的 pending/live 与 ready 在同一串行边界交接；通知不是持久记录，新 session/关闭页会丢弃尚未入 SSE 的旧 pending，已经入 SSE 的短断线消息沿现有 cursor 回放。完整细节仍保留在后端日志。
+
+不把 HTTP invoke 的所有失败再映射一次为用户错误。共享 preset 清理失败原先同时显式 toast 与返回 Err，现只保留诊断与 Result，由调用者通知；其他显式部分结果/恢复警告仍遵循原生语义，后续主操作另有失败时可能同时得到请求错误，不承诺跨不同文案去重。
 
 ## 4. Dev Observability
 

@@ -1,5 +1,6 @@
 //! Native browser host: no Tauri, WebView, display server or parallel business backend.
 mod ai;
+mod backend_errors;
 mod commands;
 mod downloads;
 mod error;
@@ -74,7 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The same buffer the native shell keeps: the backend log panel reads it, the journal still
     // receives everything through the fmt layer.
     let backend_logs = Arc::new(BackendLogStore::new());
+    let backend_errors = Arc::new(backend_errors::BackendErrorHub::default());
     {
+        let errors = backend_errors.clone();
         use tracing_subscriber::prelude::*;
         tracing_subscriber::registry()
             .with(
@@ -83,6 +86,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .with(tracing_subscriber::fmt::layer())
             .with(backend_logs.layer())
+            .with(tt_adapter_observability::user_errors::BackendUserErrorLayer::new(Arc::new(
+                move |message| errors.publish(message),
+            )))
             .init();
     }
     let options = Options::parse();
@@ -227,6 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         downloads: Default::default(),
         archives,
+        backend_errors,
         backend_logs,
         llm_api_logs,
         services,
@@ -249,6 +256,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         static_files: tower_http::services::ServeDir::new(web_root)
             .append_index_html_on_directories(false),
     });
+    let error_hub = host.backend_errors.clone();
+    let error_cancel = cancel.clone();
+    let error_worker = tokio::spawn(async move { error_hub.run(error_cancel).await });
     let listener = tokio::net::TcpListener::bind(options.listen).await?;
     tracing::info!(listen = %options.listen, origin = %host.security.public_origin, "Native TT browser host ready");
     let expiry_cancel = cancel.clone();
@@ -276,6 +286,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     history_worker.await?;
     retention_worker.await?;
     expiry_worker.await?;
+    error_worker.await?;
     result?;
     Ok(())
 }

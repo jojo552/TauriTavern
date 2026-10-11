@@ -85,7 +85,7 @@ src-tauri/
 | `tt-application` | 用例服务、业务编排、任务协调、policy 执行 |
 | `tt-adapter-http` | 共享 HTTP client pool/profile/helper、GitHub 更新查询、外部导入下载器 |
 | `tt-adapter-mcp` | RMCP client、协议版本策略与 Streamable HTTP lifecycle、tools/list pagination 与 tool validation |
-| `tt-adapter-observability` | 后端日志环形缓冲与 tracing layer、LLM API 日志存储与请求记录装饰器（含日志副本脱敏）；向宿主提供实时订阅，由宿主决定交付方式 |
+| `tt-adapter-observability` | 后端日志环形缓冲与 tracing layer、显式用户错误的共同 tracing 选择、LLM API 日志存储与请求记录装饰器（含日志副本脱敏）；由宿主拥有订阅、就绪、排队与交付 |
 | `tt-adapter-provider-http` | LLM、SearXNG、SD、Translate、TTS、embedding、provider metadata 的 HTTP repository |
 | `tt-adapter-triviumdb` | 按命名空间管理 TriviumDB、阻塞执行、原生查询与持久化 |
 | `tt-adapter-vector` | Vector 的 ACID 本地索引与本地 embedding runtime；不承载 provider HTTP |
@@ -240,7 +240,7 @@ Tauri 的 `app/composition/services` 调它后，把 `CoreServices` 与 sync/arc
 
 - runtime path 和数据目录选择引导配置。
 - `BundledResourceStore` 的 AppHandle / packaged-resource 访问。
-- logging / Dev observability 中需要 Tauri event 或 AppHandle 的部分。
+- logging / Dev observability 中需要 Tauri event 或 AppHandle 的部分；显式用户错误的 tracing 选择共用 `tt-adapter-observability::user_errors`，事件 DTO 归 `tt-contracts::observability`，宿主分别拥有 pending/ready 与投递。
 - Data Archive 的 Tauri file picker/share glue，与 native sync 的 dialog/event/platform glue。
 
 已经迁出的共享 IO：`FileContentRepository`、`FilePresetRepository` 与 `DirectoryBundledResources` 在 `tt-adapter-storage-core`；`GitHubUpdateRepository`、`HttpExternalImportDownloader` 在 `tt-adapter-http`；`FileDataArchiveGateway` 与 executor 在 `tt-adapter-archive`。宿主只选择资源来源、注入路径/版本/能力，并处理交付：Tauri picker/share 与浏览器 staged upload / 一次性下载是不同 glue，不是不同归档实现。

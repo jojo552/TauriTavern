@@ -101,8 +101,8 @@ impl PresetService {
             )
             .await
             .inspect_err(|error| {
+                // The same failure is returned below; its caller owns the user notification.
                 tracing::error!(
-                    target: tt_contracts::observability::USER_VISIBLE_ERROR,
                     "Deleted preset '{}' but could not delete its linked Agent Skills: {}",
                     name,
                     error

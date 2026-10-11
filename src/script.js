@@ -566,6 +566,7 @@ function showBackendErrorToast(payload) {
         timeOut: 10000,
         extendedTimeOut: 15000,
         preventDuplicates: true,
+        escapeHtml: true,
     });
 }
 

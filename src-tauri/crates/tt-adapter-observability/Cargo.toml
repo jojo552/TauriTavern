@@ -13,5 +13,6 @@ tokio = { version = "1", default-features = false, features = ["fs", "io-util", 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 url = { workspace = true }
+tt-contracts = { path = "../tt-contracts" }
 tt-domain = { path = "../tt-domain" }
 tt-ports = { path = "../tt-ports" }

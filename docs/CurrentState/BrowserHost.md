@@ -88,10 +88,15 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 | SillyTavern 纯前端扩展、共享 API 与资源端点 | 复用现有前端/共享服务；不是任意第三方扩展全部兼容的保证。Node 后端插件不支持。 |
 | TT LAN / TT-Sync / 同步自动化 | 当前 HTTP command dispatch 未接 `lan_sync_*`、`tt_sync_*`、`sync_*` 命令；原生面板仍依赖 Tauri invoke/event，不能因共享库存在就宣称浏览器可用。 |
 | 前端日志 | 本地 `api.dev.frontendLogs` 与捕获设置可用；`devlog_append_frontend_logs` 将页面日志镜像到服务端 tracing。 |
-| 后端日志与 LLM API 日志 | 与原生共用 `tt-adapter-observability` 的日志存储：后端 tracing 环形缓冲、LLM 请求记录装饰器与磁盘日志（位于 app root 下私有 `logs` 目录，与 `security` 同样拒绝与静态/数据/资源目录重叠，不被提供或归档）。tail/index/preview/raw 经共同 invoke 读取；实时流由页面声明启用，服务端为该页订阅共享广播并经其 SSE 推送，关闭面板或页面即取消，不设全局开关。订阅落后于广播容量时沿用 SSE 的 gap 协议使页面会话重置，不静默跳过条目；重置后前端重新声明仍在使用的订阅，断开期间的条目以 tail/index 补看。debug bundle 导出未接 HTTP host。服务端后台错误当前留在日志，未接原生 user-error toast hub。 |
+| 后端日志与 LLM API 日志 | 与原生共用 `tt-adapter-observability` 的日志存储：后端 tracing 环形缓冲、LLM 请求记录装饰器与磁盘日志（位于 app root 下私有 `logs` 目录，与 `security` 同样拒绝与静态/数据/资源目录重叠，不被提供或归档）。tail/index/preview/raw 经共同 invoke 读取；实时流由页面声明启用，服务端为该页订阅共享广播并经其 SSE 推送，关闭面板或页面即取消，不设全局开关。订阅落后于广播容量时沿用 SSE 的 gap 协议使页面会话重置，不静默跳过条目；重置后前端重新声明仍在使用的订阅，断开期间的条目以 tail/index 补看。debug bundle 导出未接 HTTP host。 |
+| 后端用户错误主动提示 | 共用原生 `ERROR + tauritavern::user_error` 的显式选择和既有 backend-error bridge/toastr；不依赖日志面板开关。密码保护的单用户宿主向已注册认证页面投递原始 message，不附带 structured fields，不声称多租户隔离或脱敏。普通 error/warn 与 HTTP invoke 返回失败不自动升级为 toast。队列和错误风暴边界见下文。 |
 | 内容视口布局 | `api.layout.snapshot()/subscribe()` 照常安装，基于 `visualViewport` / `innerWidth/innerHeight`；不安装原生窗口快照、窗口背景发布或移动端原生 IME glue。 |
 | 剪贴板与外链 | 使用 DOM Clipboard API 与浏览器窗口/导航规则，受安全上下文、权限、用户激活和弹窗阻止约束；不调用原生 clipboard/opener。 |
 | Tauri plugin / shell 能力 | 不模拟 Tauri runtime，不支持 `plugin:*` invoke；原生数据目录选择、系统分享、托盘与原生窗口控制不能视为浏览器能力。 |
+
+后端错误通知由 [backend_errors.rs](../../src-tauri/crates/tt-server/src/backend_errors.rs) 拥有页面 pending/ready；[host.rs](../../src-tauri/crates/tt-server/src/host.rs) 在认证 session 创建时注册弱 PageBus 引用、在关闭/到期/gap 时注销。共同前端先 listen 再 ready；浏览器 ready 把首批错误入页面 SSE 并返回空数组，重复 ready 幂等，新 session 再声明，短断线只回放。首次页面 ready 前有最多 50 条 startup backlog，首个 ready 后清空；后续新页面不补播历史，没有页面时不积累离线通知。
+
+每页 pending 最多 50 条，重复合并、溢出淘汰最旧消息并报告至少省略数量；摘要占一席。原文最多 2048 UTF-8 字节，超出时安全截断并提示查日志。首次 ready 最多交付 4 帧，之后每秒最多一批 4 帧，错过周期不追赶；不调用 log pump 的 `fail_gap`，避免仅因错误广播溢出就失效 AI/文件句柄。其他 SSE 数据仍适用共同回放窗口/gap 契约。前端消费者未就绪时仍有原有 50 条队列，真实 UI 用纯文本 toastr 和约 1.2 秒相同消息去重。通知不是历史存储：新 session/关闭页会丢弃尚未进 SSE 的旧 pending，已入 SSE 的短断线通知按 cursor 回放；日志面板可查看完整详情。这不是系统通知或 Web Push。
 
 不可用或拼错的 HTTP command 明确返回错误，不静默降级为成功。后续接入能力应复用共享服务，并保留真实宿主差异；测试结果应注明验证范围，不能由 command 已接线推导全平台通过。
 
