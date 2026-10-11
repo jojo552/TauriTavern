@@ -9,8 +9,8 @@ use tracing_subscriber::{
 };
 
 use tt_adapter_observability::devtools::BackendLogStore;
-use tt_adapter_observability::user_errors::BackendUserErrorLayer;
 pub use tt_adapter_observability::user_errors::BackendErrorSink;
+use tt_adapter_observability::user_errors::BackendUserErrorLayer;
 
 pub struct TracingRuntimeGuard {
     _file_guard: tracing_appender::non_blocking::WorkerGuard,

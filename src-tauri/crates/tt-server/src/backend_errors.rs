@@ -49,7 +49,10 @@ impl PendingErrors {
                 self.omitted
             );
             self.omitted = 0;
-            if bus.emit(BACKEND_ERROR_EVENT, BackendErrorPayload { message }).is_err() {
+            if bus
+                .emit(BACKEND_ERROR_EVENT, BackendErrorPayload { message })
+                .is_err()
+            {
                 return;
             }
             remaining -= 1;
@@ -58,7 +61,10 @@ impl PendingErrors {
             let Some(message) = self.messages.pop_front() else {
                 break;
             };
-            if bus.emit(BACKEND_ERROR_EVENT, BackendErrorPayload { message }).is_err() {
+            if bus
+                .emit(BACKEND_ERROR_EVENT, BackendErrorPayload { message })
+                .is_err()
+            {
                 break;
             }
         }
@@ -123,7 +129,11 @@ impl BackendErrorHub {
     }
 
     pub fn remove_page(&self, id: &str) {
-        self.state.lock().expect("backend error hub poisoned").pages.remove(id);
+        self.state
+            .lock()
+            .expect("backend error hub poisoned")
+            .pages
+            .remove(id);
     }
 
     pub fn ready(&self, id: &str) -> Result<(), CommandError> {
@@ -131,9 +141,13 @@ impl BackendErrorHub {
         let page = state.pages.get_mut(id).ok_or_else(|| {
             CommandError::InternalServerError("Backend error bridge page is not registered".into())
         })?;
-        let bus = page.bus.upgrade().filter(|bus| !bus.closed().is_cancelled()).ok_or_else(|| {
-            CommandError::BadRequest("Backend error bridge page is closed".into())
-        })?;
+        let bus = page
+            .bus
+            .upgrade()
+            .filter(|bus| !bus.closed().is_cancelled())
+            .ok_or_else(|| {
+                CommandError::BadRequest("Backend error bridge page is closed".into())
+            })?;
         if page.ready {
             return Ok(());
         }
@@ -203,7 +217,10 @@ mod tests {
         assert_eq!(frame["event"], BACKEND_ERROR_EVENT);
         assert!(frame["id"].is_u64());
         assert_eq!(frame["payload"].as_object().unwrap().len(), 1);
-        (cursor, frame["payload"]["message"].as_str().unwrap().to_string())
+        (
+            cursor,
+            frame["payload"]["message"].as_str().unwrap().to_string(),
+        )
     }
 
     #[tokio::test]
@@ -259,7 +276,10 @@ mod tests {
         hub.ready("page").unwrap();
         let mut stream = bus.attach(None).unwrap();
         for index in 0..40 {
-            assert_eq!(message(&mut stream).await, (index, format!("error {index:02}")));
+            assert_eq!(
+                message(&mut stream).await,
+                (index, format!("error {index:02}"))
+            );
         }
         bus.close();
         assert!(stream.next().await.unwrap().is_none());
@@ -270,8 +290,12 @@ mod tests {
         let hub = Arc::new(BackendErrorHub::default());
         let captured = hub.clone();
         let subscriber = tracing_subscriber::registry()
-            .with(tracing_subscriber::EnvFilter::new("info,tauritavern::user_error=off"))
-            .with(BackendUserErrorLayer::new(Arc::new(move |message| captured.publish(message))));
+            .with(tracing_subscriber::EnvFilter::new(
+                "info,tauritavern::user_error=off",
+            ))
+            .with(BackendUserErrorLayer::new(Arc::new(move |message| {
+                captured.publish(message)
+            })));
         tracing::subscriber::with_default(subscriber, || {
             tracing::error!(target: USER_VISIBLE_ERROR, "filtered out");
         });
@@ -281,7 +305,10 @@ mod tests {
         hub.publish("unfiltered hub message".into());
         hub.deliver_pending();
         let mut stream = bus.attach(None).unwrap();
-        assert_eq!(message(&mut stream).await, (0, "unfiltered hub message".into()));
+        assert_eq!(
+            message(&mut stream).await,
+            (0, "unfiltered hub message".into())
+        );
     }
 
     #[tokio::test]
@@ -311,7 +338,10 @@ mod tests {
         hub.publish("new page live".into());
         hub.deliver_pending();
         let mut fresh_stream = fresh.attach(None).unwrap();
-        assert_eq!(message(&mut fresh_stream).await, (0, "new page live".into()));
+        assert_eq!(
+            message(&mut fresh_stream).await,
+            (0, "new page live".into())
+        );
     }
 
     #[tokio::test]
@@ -328,14 +358,27 @@ mod tests {
         }
         hub.deliver_pending();
         let mut stream = bus.attach(None).unwrap();
-        assert!(message(&mut stream).await.1.contains("coalesced or omitted"));
+        assert!(
+            message(&mut stream)
+                .await
+                .1
+                .contains("coalesced or omitted")
+        );
         for index in 51..54 {
             assert_eq!(message(&mut stream).await.1, format!("distinct {index}"));
         }
-        let channel = bus.channel(&serde_json::json!({ "channel": { "$channel": "still-live" } }), "channel").unwrap();
+        let channel = bus
+            .channel(
+                &serde_json::json!({ "channel": { "$channel": "still-live" } }),
+                "channel",
+            )
+            .unwrap();
         channel.send("other resources still work").unwrap();
         let (_, frame) = stream.next().await.unwrap().unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&frame).unwrap()["type"], "channel");
+        assert_eq!(
+            serde_json::from_str::<Value>(&frame).unwrap()["type"],
+            "channel"
+        );
         assert!(!bus.closed().is_cancelled());
         for _ in 0..12 {
             hub.deliver_pending();

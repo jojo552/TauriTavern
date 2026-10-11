@@ -86,9 +86,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .with(tracing_subscriber::fmt::layer())
             .with(backend_logs.layer())
-            .with(tt_adapter_observability::user_errors::BackendUserErrorLayer::new(Arc::new(
-                move |message| errors.publish(message),
-            )))
+            .with(
+                tt_adapter_observability::user_errors::BackendUserErrorLayer::new(Arc::new(
+                    move |message| errors.publish(message),
+                )),
+            )
             .init();
     }
     let options = Options::parse();

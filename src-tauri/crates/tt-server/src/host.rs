@@ -184,7 +184,8 @@ async fn download(
 async fn create_session(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
     match host.security.create_session(&headers) {
         Ok((session, cookie)) => {
-            host.backend_errors.register_page(&session.id, &session.page.bus);
+            host.backend_errors
+                .register_page(&session.id, &session.page.bus);
             let mut response =
                 Json(json!({ "sessionId": session.id, "csrfToken": session.csrf })).into_response();
             response
