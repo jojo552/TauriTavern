@@ -26,7 +26,8 @@
 ### 2.1 HTML 入口与预加载遮罩
 
 - `src/index.html`
-  - 开屏：`#preloader`（logo、进度条、阶段文字），静态写在 HTML 中，首帧即可见、不依赖任何模块；样式在 `css/loader.css`。不透明背景且只动画 transform/opacity，不做全屏 blur；`prefers-reduced-motion` 时停止装饰动画。
+  - 开屏：`#preloader`（logo、两层缓慢漂移的色光、进度条、阶段文字），静态写在 HTML 中，首帧即可见、不依赖任何模块；样式在 `css/loader.css`。进度条是“揭示式”：滑动的窗口内反向平移填充层，青→金渐变固定在轨道上随进度显露，前沿带光点；阶段文字每次更换都淡入（`boot-splash.js` 换一个新元素以重启 CSS 动画）。不透明背景且只动画 transform/opacity，不做全屏 blur；`prefers-reduced-motion` 时停止装饰动画与位移，只保留淡出。
+  - 阶段文字描述该段实际在做的事：读取设置与角色列表（48%）、应用设置与预设（60%，测量显示主要耗时在应用设置）、加载角色（70%）、启用内置扩展（80%）、即将就绪：加载扩展与上次聊天（88%，APP_READY 后的第三方扩展与上次聊天）。
   - 模块入口：`<script type="module" src="init.js"></script>`
   - 约束：不使用 modulepreload（移动端 WebView 上曾有缓存/预加载失败问题）。
 

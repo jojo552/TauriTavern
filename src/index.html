@@ -62,11 +62,20 @@
 
 <body class="no-blur">
     <div id="preloader" aria-busy="true">
-        <div class="tt-boot-splash__glow"></div>
-        <img class="tt-boot-splash__logo" src="img/logo.png" alt="" width="512" height="512" draggable="false">
-        <div class="tt-boot-splash__progress">
-            <div class="tt-boot-splash__track" role="progressbar" aria-label="TauriTavern" aria-valuemin="0" aria-valuemax="100" aria-valuenow="4"><div class="tt-boot-splash__bar"></div></div>
-            <div class="tt-boot-splash__status"><span class="tt-boot-splash__text"></span><span class="tt-boot-splash__percent">4%</span></div>
+        <div class="tt-boot-splash__aurora tt-boot-splash__aurora--teal"></div>
+        <div class="tt-boot-splash__aurora tt-boot-splash__aurora--gold"></div>
+        <div class="tt-boot-splash__content">
+            <div class="tt-boot-splash__brand">
+                <img class="tt-boot-splash__logo" src="img/logo.png" alt="" width="512" height="512" draggable="false">
+                <div class="tt-boot-splash__shadow"></div>
+            </div>
+            <div class="tt-boot-splash__progress">
+                <div class="tt-boot-splash__meter">
+                    <div class="tt-boot-splash__track" role="progressbar" aria-label="TauriTavern" aria-valuemin="0" aria-valuemax="100" aria-valuenow="4"><div class="tt-boot-splash__bar"><div class="tt-boot-splash__fill"></div></div></div>
+                    <div class="tt-boot-splash__head"></div>
+                </div>
+                <div class="tt-boot-splash__status"><span class="tt-boot-splash__text"></span><span class="tt-boot-splash__percent">4%</span></div>
+            </div>
         </div>
     </div>
     <div id="bg1"></div>

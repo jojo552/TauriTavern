@@ -274,7 +274,7 @@ async function initializeApplication() {
     // The locale fetch runs alongside the module imports below, so the splash is labelled in the
     // user's language almost at once. Startup's initLocales awaits the same fetch and reports a
     // failure there; here a failure only leaves the label empty.
-    loadLocaleData().then(() => setBootProgress(0, t`Starting: loading the application…`), () => {});
+    loadLocaleData().then(() => setBootProgress(0, t`Loading app files…`), () => {});
 
     try {
         if (PERF_ENABLED) {

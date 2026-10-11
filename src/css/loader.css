@@ -5,24 +5,23 @@
     --tt-boot-progress: 0.04;
     --tt-boot-teal: #22b6c6;
     --tt-boot-gold: #f5bb2b;
+    --tt-boot-ease: cubic-bezier(0.22, 1, 0.36, 1);
     position: fixed;
     inset: 0;
     /* Below #toast-container (999999) so startup notices stay readable. */
     z-index: 999998;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: clamp(20px, 5vh, 40px);
     padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
-    background: #161718;
-    color: rgb(220, 220, 210);
+    background: radial-gradient(ellipse 120% 90% at 50% 38%, #1d2123 0%, #151718 55%, #101112 100%);
+    color: rgb(220 220 210);
     font: 13px/1.4 "Noto Sans", sans-serif;
     contain: strict;
     overflow: hidden;
     user-select: none;
     -webkit-user-select: none;
-    transition: opacity 400ms ease, transform 400ms ease;
+    transition: opacity 450ms ease 150ms;
 }
 
 html.tt-oled-background #preloader {
@@ -31,21 +30,55 @@ html.tt-oled-background #preloader {
 
 #preloader.tt-boot-splash--done {
     opacity: 0;
-    transform: scale(1.04);
     pointer-events: none;
 }
 
-.tt-boot-splash__glow {
+/* Two soft colour fields drift behind the content. Gradients are rasterised once; the drift is
+   transform-only. */
+.tt-boot-splash__aurora {
     position: absolute;
     top: 50%;
     left: 50%;
-    width: min(110vmin, 760px);
+    width: min(90vmin, 600px);
     aspect-ratio: 1;
-    margin: calc(min(110vmin, 760px) / -2) 0 0 calc(min(110vmin, 760px) / -2);
+    margin: calc(min(90vmin, 600px) / -2) 0 0 calc(min(90vmin, 600px) / -2);
     border-radius: 50%;
-    background: radial-gradient(circle, rgb(34 182 198 / 0.20) 0%, rgb(245 187 43 / 0.08) 42%, transparent 68%);
     pointer-events: none;
-    animation: tt-boot-glow 4.5s ease-in-out infinite alternate;
+}
+
+.tt-boot-splash__aurora--teal {
+    background: radial-gradient(circle, rgb(34 182 198 / 0.22) 0%, rgb(34 182 198 / 0.07) 40%, transparent 68%);
+    animation: tt-boot-drift-teal 11s ease-in-out infinite alternate;
+}
+
+.tt-boot-splash__aurora--gold {
+    background: radial-gradient(circle, rgb(245 187 43 / 0.16) 0%, rgb(245 187 43 / 0.05) 40%, transparent 68%);
+    animation: tt-boot-drift-gold 13s ease-in-out infinite alternate;
+}
+
+html.tt-oled-background .tt-boot-splash__aurora {
+    opacity: 0.6;
+}
+
+.tt-boot-splash__content {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: clamp(24px, 6vh, 48px);
+    transition: transform 600ms var(--tt-boot-ease) 150ms;
+}
+
+#preloader.tt-boot-splash--done .tt-boot-splash__content {
+    transform: translateY(-10px) scale(1.04);
+}
+
+.tt-boot-splash__brand {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    animation: tt-boot-enter 800ms var(--tt-boot-ease) both;
 }
 
 .tt-boot-splash__logo {
@@ -53,36 +86,60 @@ html.tt-oled-background #preloader {
     width: min(58vmin, 260px);
     height: auto;
     -webkit-user-drag: none;
-    animation: tt-boot-enter 650ms cubic-bezier(0.22, 1, 0.36, 1) both,
-        tt-boot-float 3.4s ease-in-out 650ms infinite;
+    animation: tt-boot-float 4s ease-in-out 800ms infinite;
+}
+
+/* The logo's shadow on the "floor" tightens and fades as the logo rises. */
+.tt-boot-splash__shadow {
+    width: min(34vmin, 150px);
+    height: 14px;
+    margin-top: calc(min(58vmin, 260px) * -0.16);
+    border-radius: 50%;
+    background: radial-gradient(closest-side, rgb(0 0 0 / 0.55), transparent);
+    animation: tt-boot-shadow 4s ease-in-out 800ms infinite;
 }
 
 .tt-boot-splash__progress {
-    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    width: min(70vw, 300px);
-    animation: tt-boot-fade-in 650ms ease-out 150ms both;
+    gap: 12px;
+    width: min(72vw, 320px);
+    animation: tt-boot-rise 800ms var(--tt-boot-ease) 200ms both;
+}
+
+.tt-boot-splash__meter {
+    position: relative;
 }
 
 .tt-boot-splash__track {
     position: relative;
-    height: 6px;
+    height: 5px;
     border-radius: 999px;
-    background: rgb(255 255 255 / 0.10);
+    background: rgb(255 255 255 / 0.08);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.04);
     overflow: hidden;
 }
 
-/* A full-width bar slides in from the left: translateX keeps its rounded end undistorted. */
-.tt-boot-splash__bar {
+/* The bar is a full-width window that slides in from the left (translateX keeps its rounded end
+   undistorted). Its fill counter-slides with the same timing, so the teal-to-gold gradient stays
+   fixed to the track and is revealed as startup advances. */
+.tt-boot-splash__bar,
+.tt-boot-splash__fill,
+.tt-boot-splash__head {
     position: absolute;
     inset: 0;
+    transition: transform 700ms var(--tt-boot-ease);
+}
+
+.tt-boot-splash__bar {
     border-radius: inherit;
-    background: linear-gradient(90deg, var(--tt-boot-teal), var(--tt-boot-gold));
-    transform: translateX(calc((var(--tt-boot-progress) - 1) * 100%));
-    transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
     overflow: hidden;
+    transform: translateX(calc((var(--tt-boot-progress) - 1) * 100%));
+}
+
+.tt-boot-splash__fill {
+    background: linear-gradient(90deg, var(--tt-boot-teal), #7fd3c4 45%, var(--tt-boot-gold));
+    transform: translateX(calc((1 - var(--tt-boot-progress)) * 100%));
 }
 
 /* Shows that a long stage is still working without pretending the stage has advanced. */
@@ -90,60 +147,146 @@ html.tt-oled-background #preloader {
     content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.55), transparent);
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.5), transparent);
     transform: translateX(-100%);
-    animation: tt-boot-shimmer 1.8s ease-in-out infinite;
+    animation: tt-boot-shimmer 2.2s ease-in-out infinite;
+}
+
+/* A glowing head rides the leading edge of the bar. */
+.tt-boot-splash__head {
+    pointer-events: none;
+    transform: translateX(calc((var(--tt-boot-progress) - 1) * 100%));
+}
+
+.tt-boot-splash__head::before,
+.tt-boot-splash__head::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    right: 0;
+    border-radius: 50%;
+}
+
+.tt-boot-splash__head::before {
+    width: 30px;
+    height: 30px;
+    margin: -15px -15px 0 0;
+    background: radial-gradient(closest-side, rgb(255 214 120 / 0.6), rgb(245 187 43 / 0.18) 55%, transparent);
+    animation: tt-boot-pulse 1.6s ease-in-out infinite;
+}
+
+.tt-boot-splash__head::after {
+    width: 7px;
+    height: 7px;
+    margin: -3.5px -3.5px 0 0;
+    background: #fff4d6;
+    box-shadow: 0 0 6px 1px rgb(245 187 43 / 0.8);
 }
 
 .tt-boot-splash__status {
     display: flex;
+    align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    color: rgb(220 220 210 / 0.65);
-    font-variant-numeric: tabular-nums;
+    color: rgb(220 220 210 / 0.68);
+    letter-spacing: 0.02em;
 }
 
 .tt-boot-splash__text {
     min-width: 0;
+}
+
+/* boot-splash.js puts each stage label in a new element, so every stage change fades in. */
+.tt-boot-splash__text > span {
+    display: block;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+    animation: tt-boot-text-in 420ms var(--tt-boot-ease) both;
+}
+
+.tt-boot-splash__percent {
+    flex: none;
+    color: rgb(245 205 110 / 0.9);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Completion: the bar closes quickly while the cover fades out. */
+#preloader.tt-boot-splash--done .tt-boot-splash__bar,
+#preloader.tt-boot-splash--done .tt-boot-splash__fill,
+#preloader.tt-boot-splash--done .tt-boot-splash__head {
+    transition-duration: 300ms;
 }
 
 @keyframes tt-boot-enter {
-    from { opacity: 0; transform: translateY(12px) scale(0.92); }
+    from { opacity: 0; transform: translateY(14px) scale(0.9); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes tt-boot-rise {
+    from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: none; }
 }
 
 @keyframes tt-boot-float {
     0%, 100% { transform: none; }
-    50% { transform: translateY(-8px); }
+    50% { transform: translateY(-9px); }
 }
 
-@keyframes tt-boot-fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
+@keyframes tt-boot-shadow {
+    0%, 100% { opacity: 1; transform: none; }
+    50% { opacity: 0.55; transform: scale(0.8); }
 }
 
-@keyframes tt-boot-glow {
-    from { opacity: 0.55; transform: scale(0.94); }
-    to { opacity: 1; transform: scale(1.04); }
+@keyframes tt-boot-drift-teal {
+    from { transform: translate(-22%, -18%) scale(1); }
+    to { transform: translate(-6%, -2%) scale(1.15); }
+}
+
+@keyframes tt-boot-drift-gold {
+    from { transform: translate(22%, 20%) scale(1.1); }
+    to { transform: translate(6%, 4%) scale(0.95); }
 }
 
 @keyframes tt-boot-shimmer {
     to { transform: translateX(100%); }
 }
 
+@keyframes tt-boot-pulse {
+    0%, 100% { opacity: 0.55; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.15); }
+}
+
+@keyframes tt-boot-text-in {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-    .tt-boot-splash__glow,
+    .tt-boot-splash__aurora,
+    .tt-boot-splash__brand,
     .tt-boot-splash__logo,
+    .tt-boot-splash__shadow,
     .tt-boot-splash__progress,
-    .tt-boot-splash__bar::after {
+    .tt-boot-splash__bar::after,
+    .tt-boot-splash__head::before,
+    .tt-boot-splash__text > span {
         animation: none;
     }
 
-    .tt-boot-splash__bar {
+    .tt-boot-splash__aurora--teal { transform: translate(-14%, -10%); }
+    .tt-boot-splash__aurora--gold { transform: translate(14%, 12%); }
+
+    .tt-boot-splash__bar,
+    .tt-boot-splash__fill,
+    .tt-boot-splash__head,
+    .tt-boot-splash__content {
         transition: none;
+    }
+
+    #preloader.tt-boot-splash--done .tt-boot-splash__content {
+        transform: none;
     }
 }
 

@@ -4,7 +4,8 @@
 // before any library is available.
 
 const SPLASH_ID = 'preloader';
-const FADE_MS = 420;
+// Matches the cover's opacity transition (150ms delay + 450ms) in css/loader.css.
+const FADE_MS = 600;
 
 /**
  * Advances the progress bar. Progress never moves backwards; a missing splash (already finished,
@@ -21,8 +22,12 @@ export function setBootProgress(fraction, text) {
     track.setAttribute('aria-valuenow', String(percent));
     splash.style.setProperty('--tt-boot-progress', String(percent / 100));
     splash.querySelector('.tt-boot-splash__percent').textContent = `${percent}%`;
-    if (text !== undefined) {
-        splash.querySelector('.tt-boot-splash__text').textContent = text;
+    const label = splash.querySelector('.tt-boot-splash__text');
+    if (text !== undefined && label.textContent !== text) {
+        // A fresh element restarts the CSS fade-in, so each new stage label eases in.
+        const span = document.createElement('span');
+        span.textContent = text;
+        label.replaceChildren(span);
     }
 }
 

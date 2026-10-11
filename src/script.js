@@ -1162,7 +1162,7 @@ async function firstLoadInit() {
 
     try {
         await initLocales();
-        setStage('shell', t`Starting: preparing the interface…`, 0.34);
+        setStage('shell', t`Preparing the interface…`, 0.34);
         await nextPaint();
 
         registerPromptManagerMigration();
@@ -1175,7 +1175,7 @@ async function firstLoadInit() {
         applyBrowserFixes();
 
         // Ensure bridge/interceptors are installed before first /api/* calls.
-        setStage('core', t`Starting: connecting to the backend…`, 0.4);
+        setStage('core', t`Connecting to the backend…`, 0.4);
         await hostReadyPromise;
         const tauriTavernSettings = await getTauriTavernSettings();
         initializeChatVirtualization(tauriTavernSettings);
@@ -1197,7 +1197,7 @@ async function firstLoadInit() {
             fetchSettingsSnapshot(),
         ]);
 
-        setStage('core', t`Starting: loading core data…`, 0.48);
+        setStage('core', t`Reading settings and the character list…`, 0.48);
         const clientVersionPromise = getClientVersion();
         const [[bootstrapMetadata, settingsSnapshot]] = await Promise.all([
             startupDataPromise,
@@ -1229,7 +1229,7 @@ async function firstLoadInit() {
         initNovelAISettings();
         initSystemPrompts();
 
-        setStage('full', t`Starting: loading extensions and optional modules…`, 0.6);
+        setStage('full', t`Applying settings and presets…`, 0.6);
         initExtensions();
         initExtensionSlashCommands();
         ToolManager.initToolSlashCommands();
@@ -1246,7 +1246,7 @@ async function firstLoadInit() {
         initBookmarks();
         primeUserAvatarsSnapshot(bootstrapMetadata.avatars);
         await getUserAvatars(true, user_avatar);
-        setBootProgress(0.7, t`Starting: loading characters…`);
+        setBootProgress(0.7, t`Loading characters…`);
         const appliedCharacters = await applyCharactersSnapshot(bootstrapMetadata.characters);
         if (!appliedCharacters) {
             return;
@@ -1280,7 +1280,7 @@ async function firstLoadInit() {
 
         let deferThirdPartyExtensions = false;
         if (extensionsEnabled) {
-            setBootProgress(0.8, t`Starting: activating extensions…`);
+            setBootProgress(0.8, t`Activating built-in extensions…`);
             await extensionsDiscoveryPromise;
             const enableAutoUpdate = Boolean(settingsSnapshot?.enable_extensions_auto_update);
             const isVersionChanged = settings.currentVersion !== currentVersion;
@@ -1321,7 +1321,7 @@ async function firstLoadInit() {
         await fixViewport();
         await eventSource.emit(event_types.APP_READY);
         perfMark('tt:startup:ready');
-        setBootProgress(0.88, t`Starting: loading extensions and the last chat…`);
+        setBootProgress(0.88, t`Almost ready: loading extensions and the last chat…`);
 
         // Startup ordering is unchanged: these still run after APP_READY. The splash now waits for
         // them, so the first view the user sees has its extensions and last chat in place.
