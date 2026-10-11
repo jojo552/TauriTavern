@@ -98,6 +98,8 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 每页 pending 最多 50 条，重复合并、溢出淘汰最旧消息并报告至少省略数量；摘要占一席。原文最多 2048 UTF-8 字节，超出时安全截断并提示查日志。首次 ready 最多交付 4 帧，之后每秒最多一批 4 帧，错过周期不追赶；不调用 log pump 的 `fail_gap`，避免仅因错误广播溢出就失效 AI/文件句柄。其他 SSE 数据仍适用共同回放窗口/gap 契约。前端消费者未就绪时仍有原有 50 条队列，真实 UI 用纯文本 toastr 和约 1.2 秒相同消息去重。通知不是历史存储：新 session/关闭页会丢弃尚未进 SSE 的旧 pending，已入 SSE 的短断线通知按 cursor 回放；日志面板可查看完整详情。这不是系统通知或 Web Push。
 
+聊天区尺寸变化共用 [RossAscends-mods.js](../../src/scripts/RossAscends-mods.js) 的输入框自适应与 resize 处理：消息视图保留既有底部距离补偿，欢迎页则保持阅读位置，不因手机视口变矮被主动推下。依据当前 direct-child `.welcomePanel` 视图判断，不用持久聊天 ID 排除合法的临时聊天；resize 高度基线仍在每次回调更新。此规则同时适用于原生与浏览器宿主。
+
 不可用或拼错的 HTTP command 明确返回错误，不静默降级为成功。后续接入能力应复用共享服务，并保留真实宿主差异；测试结果应注明验证范围，不能由 command 已接线推导全平台通过。
 
 用户文件 upload/delete/verify 由共享 `UserMediaService` 与文件 adapter 执行，业务验证规则不在两个 host command 各维护一份；写入以同步暂存文件后原子发布为边界，不直接截断旧文件。Agent 持久状态 prune、角色重命名/删除的关联 Skill 迁移，以及预设删除的关联清理同样由已有应用用例负责。

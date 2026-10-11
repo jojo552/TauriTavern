@@ -707,7 +707,8 @@ function autoFitSendTextArea() {
     const newHeight = sendTextArea.scrollHeight;
     sendTextArea.style.height = `${newHeight}px`;
 
-    if (!isFirefox) {
+    // Bottom-distance compensation is for messages, not the welcome screen's reading position.
+    if (!isFirefox && chatBlock.querySelector(':scope > .welcomePanel') === null) {
         setChatScrollTop(chatBlock.scrollHeight - (chatBlock.offsetHeight + originalScrollBottom));
     }
 }
@@ -887,7 +888,9 @@ export function initRossMods() {
                 const deltaHeight = newHeight - lastHeight;
                 const isScrollAtBottom = Math.abs(chatBlock.scrollHeight - chatBlock.scrollTop - newHeight) <= threshold;
 
-                if (!isScrollAtBottom && Math.abs(deltaHeight) > threshold) {
+                // A shrinking welcome viewport must not push the reader down the page.
+                if (chatBlock.querySelector(':scope > .welcomePanel') === null
+                    && !isScrollAtBottom && Math.abs(deltaHeight) > threshold) {
                     offsetChatScrollTop(-deltaHeight);
                 }
                 lastHeight = newHeight;
