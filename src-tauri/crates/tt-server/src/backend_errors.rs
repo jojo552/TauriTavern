@@ -290,11 +290,12 @@ mod tests {
         let hub = Arc::new(BackendErrorHub::default());
         let captured = hub.clone();
         let filter = tracing_subscriber::EnvFilter::new(format!("info,{USER_VISIBLE_ERROR}=off"));
-        let subscriber = tracing_subscriber::registry()
-            .with(filter)
-            .with(BackendUserErrorLayer::new(Arc::new(move |message| {
-                captured.publish(message)
-            })));
+        let subscriber =
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(BackendUserErrorLayer::new(Arc::new(move |message| {
+                    captured.publish(message)
+                })));
         tracing::subscriber::with_default(subscriber, || {
             tracing::error!(target: USER_VISIBLE_ERROR, "filtered out");
         });
