@@ -69,7 +69,7 @@ mod tests {
             move |message| captured.lock().unwrap().push(message),
         )));
         tracing::subscriber::with_default(subscriber, || {
-            tracing::error!(target: "tauritavern::other", "ordinary error");
+            tracing::error!(target: "ordinary", "ordinary error");
             tracing::warn!(target: USER_VISIBLE_ERROR, "warning");
             tracing::error!(target: USER_VISIBLE_ERROR, error = "private diagnostic field", " visible {} ", "error");
             tracing::error!(target: USER_VISIBLE_ERROR, "  ");

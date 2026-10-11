@@ -289,10 +289,9 @@ mod tests {
     async fn env_filter_applies_to_notifications_as_well_as_logs() {
         let hub = Arc::new(BackendErrorHub::default());
         let captured = hub.clone();
+        let filter = tracing_subscriber::EnvFilter::new(format!("info,{USER_VISIBLE_ERROR}=off"));
         let subscriber = tracing_subscriber::registry()
-            .with(tracing_subscriber::EnvFilter::new(
-                "info,tauritavern::user_error=off",
-            ))
+            .with(filter)
             .with(BackendUserErrorLayer::new(Arc::new(move |message| {
                 captured.publish(message)
             })));
