@@ -123,9 +123,9 @@ impl AgentExtensionTools {
             state.pending.retain(|_, pending| pending.owner != owner);
             let mut removed = Vec::new();
             state.tools.retain(|_, registrations| {
-                removed.extend(registrations.extract_if(.., |registration| {
-                    registration.owner == owner
-                }));
+                removed.extend(
+                    registrations.extract_if(.., |registration| registration.owner == owner),
+                );
                 !registrations.is_empty()
             });
             removed
