@@ -708,10 +708,8 @@ const handleMessageReasoningDelete = createEventHandler(removeReasoningDisplayTe
 globalThis.translate = translate;
 
 export async function init() {
-    const [html, buttonHtml] = await Promise.all([
-        renderExtensionTemplateAsync('translate', 'index'),
-        renderExtensionTemplateAsync('translate', 'buttons'),
-    ]);
+    const html = await renderExtensionTemplateAsync('translate', 'index');
+    const buttonHtml = await renderExtensionTemplateAsync('translate', 'buttons');
 
     $('#translate_wand_container').append(buttonHtml);
     $('#translation_container').append(html);

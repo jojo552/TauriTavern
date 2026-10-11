@@ -247,10 +247,8 @@ export async function init() {
     eventSource.on(event_types.APP_READY, cleanUpAttachments);
     eventSource.on(event_types.CHARACTER_DELETED, cleanUpCharacterAttachments);
     eventSource.on(event_types.CHARACTER_RENAMED, handleCharacterRename);
-    const [manageButton, attachButton] = await Promise.all([
-        renderExtensionTemplateAsync('attachments', 'manage-button', {}),
-        renderExtensionTemplateAsync('attachments', 'attach-button', {}),
-    ]);
+    const manageButton = await renderExtensionTemplateAsync('attachments', 'manage-button', {});
+    const attachButton = await renderExtensionTemplateAsync('attachments', 'attach-button', {});
     $('#data_bank_wand_container').append(manageButton);
     $('#attach_file_wand_container').append(attachButton);
 
