@@ -5029,8 +5029,10 @@ function getVisibilityByInitiator(initiator) {
 }
 
 async function addSDGenButtons() {
-    const buttonHtml = await renderExtensionTemplateAsync('stable-diffusion', 'button');
-    const dropdownHtml = await renderExtensionTemplateAsync('stable-diffusion', 'dropdown');
+    const [buttonHtml, dropdownHtml] = await Promise.all([
+        renderExtensionTemplateAsync('stable-diffusion', 'button'),
+        renderExtensionTemplateAsync('stable-diffusion', 'dropdown'),
+    ]);
 
     $('#sd_wand_container').append(buttonHtml);
     $(document.body).append(dropdownHtml);

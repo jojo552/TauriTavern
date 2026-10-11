@@ -824,6 +824,16 @@ async function activateExtensions({ parallelism = 1, includeExtension = () => tr
         return { activate: true };
     };
 
+    // Locale files are plain data: read them for this pass up front, but apply each one at its
+    // extension's own activation step. addLocaleData keeps the first value of a shared key, so the
+    // application order must stay the activation order.
+    const localeReads = new Map();
+    for (const [name, manifest] of extensions) {
+        if (shouldActivateExtension({ name, manifest }).activate) {
+            localeReads.set(name, readExtensionLocale(name, manifest));
+        }
+    }
+
     const activateSingleExtension = async ({ name, manifest }) => {
         const displayName = manifest.display_name || name;
 
@@ -854,7 +864,10 @@ async function activateExtensions({ parallelism = 1, includeExtension = () => tr
                 thirdPartyHljsPromise ??= getHljs();
                 await thirdPartyHljsPromise;
             }
-            await addExtensionLocale(name, manifest);
+            const locale = await (localeReads.get(name) ?? readExtensionLocale(name, manifest));
+            if (locale) {
+                addLocaleData(locale.locale, locale.data);
+            }
             await Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]);
             await callExtensionHook(name, 'activate');
             activeExtensions.add(name);
@@ -924,8 +937,10 @@ function autoConnectInputHandler() {
 }
 
 async function addExtensionsButtonAndMenu() {
-    const buttonHTML = await renderTemplateAsync('wandButton');
-    const extensionsMenuHTML = await renderTemplateAsync('wandMenu');
+    const [buttonHTML, extensionsMenuHTML] = await Promise.all([
+        renderTemplateAsync('wandButton'),
+        renderTemplateAsync('wandMenu'),
+    ]);
 
     $(document.body).append(extensionsMenuHTML);
     $('#leftSendForm').append(buttonHTML);
@@ -1031,19 +1046,21 @@ function updateStatus(success) {
 }
 
 /**
- * Adds a localization data for an extension.
+ * Reads an extension's localization data without applying it.
+ * Never rejects: a failed read is logged here and resolves to null, so reads can start early.
  * @param {string} name Extension name
  * @param {object} manifest Manifest object
+ * @returns {Promise<{ locale: string, data: object } | null>}
  */
-function addExtensionLocale(name, manifest) {
+function readExtensionLocale(name, manifest) {
     if (!manifest.i18n || typeof manifest.i18n !== 'object') {
-        return Promise.resolve();
+        return Promise.resolve(null);
     }
 
     const currentLocale = getCurrentLocale();
     const localeFile = manifest.i18n[currentLocale] || manifest.i18n.default;
     if (!localeFile) {
-        return Promise.resolve();
+        return Promise.resolve(null);
     }
 
     return fetch(getExtensionResourceUrl(name, localeFile))
@@ -1053,13 +1070,11 @@ function addExtensionLocale(name, manifest) {
             }
 
             const data = await response.json();
-
-            if (data && typeof data === 'object') {
-                addLocaleData(currentLocale, data);
-            }
+            return data && typeof data === 'object' ? { locale: currentLocale, data } : null;
         })
         .catch(err => {
             console.log('Could not load extension locale data for ' + name, err);
+            return null;
         });
 }
 

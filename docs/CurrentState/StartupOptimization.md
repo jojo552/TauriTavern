@@ -15,7 +15,7 @@
 - **开屏覆盖完整启动**：`#preloader` 是带 logo 与真实阶段进度条的开屏，覆盖到 APP_READY 之后的延后扩展激活与上次聊天加载完成才淡出，用户进入时界面已完整。启动顺序与 `APP_READY` 语义不变，只是遮罩移除时机后移。
 - **Host Ready 显式等待**：在首次 `/api/*` 访问前等待 `__TAURITAVERN_MAIN_READY__`，确保拦截器/路由已安装，且 Tauri 后端已进入可接收 `AppState` 命令的 readiness 状态。
 - **启动并发读取**：设置与启动元数据并行读取、按顺序应用，并复用本次结果。
-- **扩展启动分层**：扩展发现可提前后台启动；系统扩展仍在 Full 阶段完成，local/global third-party 扩展延后到 `APP_READY` 后串行激活，从启动关键路径移出。
+- **扩展启动分层**：扩展发现可提前后台启动；系统扩展仍在 Full 阶段完成，local/global third-party 扩展延后到 `APP_READY` 后串行激活，从启动关键路径移出。每轮激活开始时并发读取本轮待激活扩展的 locale 数据，但仍在各扩展自己的激活步骤按 `loading_order` 应用（`addLocaleData` 先写者胜）；互不依赖的扩展模板并发获取，DOM 插入顺序不变。模块脚本仍按原顺序 import，不使用 modulepreload。
 - **lib.bundle 拆分为 core/optional**：`highlight.js` 通过 `lib.js` 的 async helper 按需加载；上游同步 `/lib.js` ABI 保留在 core bundle。
 - **重任务后移**：`initTokenizers()`、`initScrapers()` 在 `APP_READY` 后、两次 paint 之后后台启动。
 
