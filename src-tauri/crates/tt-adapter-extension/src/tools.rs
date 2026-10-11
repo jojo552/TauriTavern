@@ -3,8 +3,13 @@
 //! A page registers tools and receives calls through an [`ExtensionToolEventSink`] supplied by its
 //! host. The owner is an opaque page identity (a WebView label, a browser page session) used to
 //! keep one page from resolving or disabling another page's tools.
+//!
+//! Every page of the app registers the same extension tools. A browser user may keep several pages
+//! open; each serves the tool id, and calls go to the most recently registered live page. When it
+//! closes, the next most recent page still serving the id takes over. One page registering the same
+//! id twice is still a conflict.
 
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,7 +37,8 @@ struct PendingCall {
 
 #[derive(Default)]
 struct BridgeState {
-    tools: HashMap<ToolId, Registration>,
+    /// Live registrations per tool id, oldest first; the last one serves calls.
+    tools: HashMap<ToolId, Vec<Registration>>,
     pending: HashMap<String, PendingCall>,
 }
 
@@ -52,19 +58,21 @@ impl AgentExtensionTools {
         let tool = definition.into_tool()?;
         let id = tool.descriptor.id.clone();
         let mut state = self.state.lock().expect("extension tool bridge poisoned");
-        match state.tools.entry(id.clone()) {
-            Entry::Occupied(_) => Err(DomainError::Conflict(format!(
-                "extension.tool_already_registered: `{id}` is already registered"
-            ))),
-            Entry::Vacant(entry) => {
-                entry.insert(Registration {
-                    tool,
-                    sink,
-                    owner: owner.to_owned(),
-                });
-                Ok(id)
-            }
+        let registrations = state.tools.entry(id.clone()).or_default();
+        if registrations
+            .iter()
+            .any(|registration| registration.owner == owner)
+        {
+            return Err(DomainError::Conflict(format!(
+                "extension.tool_already_registered: `{id}` is already registered by this page"
+            )));
         }
+        registrations.push(Registration {
+            tool,
+            sink,
+            owner: owner.to_owned(),
+        });
+        Ok(id)
     }
 
     pub fn set_enabled(
@@ -77,7 +85,11 @@ impl AgentExtensionTools {
         let registration = state
             .tools
             .get_mut(tool_id)
-            .filter(|registration| registration.owner == owner)
+            .and_then(|registrations| {
+                registrations
+                    .iter_mut()
+                    .find(|registration| registration.owner == owner)
+            })
             .ok_or_else(|| {
                 DomainError::NotFound(format!(
                     "extension.tool_not_registered: `{tool_id}` is not registered by this page"
@@ -109,10 +121,14 @@ impl AgentExtensionTools {
         let removed = {
             let mut state = self.state.lock().expect("extension tool bridge poisoned");
             state.pending.retain(|_, pending| pending.owner != owner);
-            state
-                .tools
-                .extract_if(|_, registration| registration.owner == owner)
-                .collect::<Vec<_>>()
+            let mut removed = Vec::new();
+            state.tools.retain(|_, registrations| {
+                removed.extend(registrations.extract_if(.., |registration| {
+                    registration.owner == owner
+                }));
+                !registrations.is_empty()
+            });
+            removed
         };
         // Dropping a sink can dispatch to the page; never do it under the lock.
         drop(removed);
@@ -126,6 +142,7 @@ impl ExtensionTools for AgentExtensionTools {
         Ok(state
             .tools
             .values()
+            .filter_map(|registrations| registrations.last())
             .map(|entry| entry.tool.clone())
             .collect())
     }
@@ -147,6 +164,7 @@ impl ExtensionTools for AgentExtensionTools {
             let Some(registration) = state
                 .tools
                 .get(&call.tool_id)
+                .and_then(|registrations| registrations.last())
                 .filter(|entry| entry.tool.enabled)
             else {
                 return Ok(ExtensionToolReply::Error {
@@ -255,6 +273,65 @@ mod tests {
             },
             arguments: serde_json::Map::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn each_open_page_serves_the_tool_and_the_latest_live_page_receives_calls() {
+        let (bridge, tool_id, mut first_page) = registered_bridge();
+        let (sender, mut second_page) = mpsc::unbounded_channel();
+        let definition = || ExtensionToolDefinition {
+            extension_id: "example".into(),
+            name: "inspect".into(),
+            description: "Inspect application state".into(),
+            input_schema: json!({"type": "object"}),
+            contexts: vec![AgentToolScope::Session],
+            enabled: true,
+        };
+        let second_sink: Arc<dyn ExtensionToolEventSink> = Arc::new(TestSink(sender));
+        assert_eq!(
+            bridge
+                .register("second", definition(), second_sink.clone())
+                .unwrap(),
+            tool_id
+        );
+        assert!(matches!(
+            bridge.register("second", definition(), second_sink),
+            Err(DomainError::Conflict(message)) if message.contains("extension.tool_already_registered")
+        ));
+        assert_eq!(bridge.list().unwrap().len(), 1);
+
+        async fn answered_by(
+            bridge: &Arc<AgentExtensionTools>,
+            tool_id: &ToolId,
+            page: &str,
+            events: &mut mpsc::UnboundedReceiver<Value>,
+        ) -> ExtensionToolReply {
+            let (_cancel, receiver) = watch::channel(false);
+            let task = tokio::spawn({
+                let bridge = bridge.clone();
+                let call = tool_call(tool_id.clone());
+                async move { bridge.call(call, receiver).await }
+            });
+            let event = events.recv().await.unwrap();
+            let reply = ExtensionToolReply::Value { value: json!(page) };
+            assert!(bridge.resolve(page, event["requestId"].as_str().unwrap(), reply));
+            task.await.unwrap().unwrap()
+        }
+        assert!(matches!(
+            answered_by(&bridge, &tool_id, "second", &mut second_page).await,
+            ExtensionToolReply::Value { value } if value == "second"
+        ));
+        bridge.clear_page("second");
+        assert!(matches!(
+            answered_by(&bridge, &tool_id, "main", &mut first_page).await,
+            ExtensionToolReply::Value { value } if value == "main"
+        ));
+        assert!(
+            second_page.try_recv().is_err(),
+            "a closed page receives no calls"
+        );
+        bridge.clear_page("main");
+        assert!(bridge.list().unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -154,7 +154,7 @@ Profile 的用法见 [配置指南](../Agent/ProfilesAndPreset.md)。`tools.list
 
 ## 注册扩展工具
 
-在扩展启动入口注册普通 JS 函数，可直接使用模块引用和闭包。稳定 ID 为 `extension/<extensionId>:<name>`，重复注册报错；注册持续到主页面 reload，与面板开关无关。
+在扩展启动入口注册普通 JS 函数，可直接使用模块引用和闭包。稳定 ID 为 `extension/<extensionId>:<name>`，同一页面重复注册报错；注册持续到主页面 reload，与面板开关无关。浏览器宿主可同时打开多个页面，每个页面都注册自己的工具：调用交给最近注册且仍存活的页面，该页面关闭后由次新的仍打开的页面接替。
 
 ```js
 await agent.tools.register({
