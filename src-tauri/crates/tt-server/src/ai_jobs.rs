@@ -440,8 +440,8 @@ impl BrowserAiJobs {
                 "Completion job already exists".into(),
             ));
         }
-        if let Some(chat_ref) = presentation.as_ref().and_then(|value| value.get("chatRef")) {
-            if entries.iter().any(|((browser, _), entry)| {
+        if let Some(chat_ref) = presentation.as_ref().and_then(|value| value.get("chatRef"))
+            && entries.iter().any(|((browser, _), entry)| {
                 browser == &session.browser
                     && entry
                         .job
@@ -449,11 +449,11 @@ impl BrowserAiJobs {
                         .as_ref()
                         .and_then(|value| value.get("chatRef"))
                         == Some(chat_ref)
-            }) {
-                return Err(CommandError::Conflict(
-                    "This chat already has an unacknowledged completion job".into(),
-                ));
-            }
+            })
+        {
+            return Err(CommandError::Conflict(
+                "This chat already has an unacknowledged completion job".into(),
+            ));
         }
         if entries.len() >= MAX_JOBS {
             return Err(CommandError::TooManyRequests(
