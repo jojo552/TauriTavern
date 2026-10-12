@@ -19,10 +19,10 @@ function getWebTransport() {
     if (webTransport) return webTransport;
     webTransport = createWebTransport({
         onState(state) {
-            if (state === 'reconnecting') {
-                globalThis.toastr?.warning?.('连接暂时中断，正在恢复。已发出的保存不会自动重发。', '正在重新连接', { timeOut: 5000 });
-            } else if (state === 'reset') {
-                globalThis.toastr?.warning?.('服务器会话已重建；未加载的聊天滑动记录和打开的文件需重新打开。当前页面内容不会自动覆盖。', '服务器会话重置', { timeOut: 8000 });
+            // Recoverable disconnects and automatic session replacement stay silent.
+            // Operation errors still propagate separately; only a stopped transport needs reload.
+            if (state === 'failed') {
+                globalThis.toastr?.warning?.('无法自动恢复连接，请手动刷新页面重试。', '需要刷新页面', { timeOut: 0, extendedTimeOut: 0 });
             }
         },
     });

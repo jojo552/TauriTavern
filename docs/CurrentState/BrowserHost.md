@@ -42,7 +42,7 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 - `channel` 帧带从 0 开始、严格递增的 `sequence`；序号分配、入队和结束共用 Channel 的串行边界，支持并发任务共享 sink。`channel-end` 结束该 Channel；前端拒绝未知或乱序帧。
 - Channel 生命周期由后端持有它的任务/注册项决定，不在每次发起它的 invoke 返回时一律删除；实时消费者也不能因独立 HTTP 请求成功就丢弃稍后到达的帧。订阅主动取消或 Channel 结束才停止交付，同 session 短暂断线保留 channels、listeners 与资源。
 - 数据帧还有页面级 SSE `id`；ready/reset 控制帧无 id，不能推进数据 cursor。PageBus 保存最多 4096 帧、总序列化 JSON 16 MiB 的滚动回放窗口，淘汰最旧帧不是永久毒化在线页面。cursor 落在窗口外、在线消费者落后或超大单帧时明确 reset；字节上限不是上游 Value 构造的瞬时内存上限。
-- SSE 断线后，transport 关闭旧 EventSource，以 1 秒到最多 10 秒退避显式重开同页 SSE，从最后已派发 `id` 继续，不重新执行已经派发的异步回调。visibility 恢复、online、BFCache pageshow 与真实 HTTP 网络失联共用这一恢复路径，不无条件拆除健康连接；单个定时器负责退避或 90 秒静默检查，旧 source/epoch/定时器回调都有 fence。服务端约每 20 秒发无 id 的 `{type:'heartbeat',sessionId}`，不入 PageBus、不推进数据 cursor；浏览器挂起时不能保证按墙钟准时检测。初始化和新 session GET 的明确网络失败也沿此退避等待，认证、有效 CommandError 和协议错误仍终止并传播。重连状态向用户可见。
+- SSE 断线后，transport 关闭旧 EventSource，以 1 秒到最多 10 秒退避显式重开同页 SSE，从最后已派发 `id` 继续，不重新执行已经派发的异步回调。visibility 恢复、online、BFCache pageshow 与真实 HTTP 网络失联共用这一恢复路径，不无条件拆除健康连接；单个定时器负责退避或 90 秒静默检查，旧 source/epoch/定时器回调都有 fence。服务端约每 20 秒发无 id 的 `{type:'heartbeat',sessionId}`，不入 PageBus、不推进数据 cursor；浏览器挂起时不能保证按墙钟准时检测。初始化和新 session GET 的明确网络失败也沿此退避等待，认证、有效 CommandError 和协议错误仍终止并传播。可恢复断线和自动 session 重建静默进行，不弹通用连接警告；只有 transport 进入 failed、自动恢复已停止时，持久提示“无法自动恢复连接，请手动刷新页面重试”。具体操作的保存结果未知、资源失效等错误仍由调用方独立报告，不因静默重连而被吞掉。
 - SSE 本身断开不强制中止仍可得到成功响应的 HTTP 保存。实际 HTTP 中断只报告结果未知，绝不自动重放 invoke；一次性 commit 的 offset 与最终确认规则保持不变。
 - 合法 owner 的 session 消失（服务器重启/过期）或回放 gap，服务器返回无 id `{type:'session-reset', reason:'expired'|'gap'}`，结束旧页。前端创建新 session/CSRF，失败的旧请求不重放；后续独立请求可继续。错误 origin/cookie 仍拒绝，不能伪装为 reset。
 

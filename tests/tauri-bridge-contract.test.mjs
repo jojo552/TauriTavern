@@ -31,6 +31,8 @@ const {
     updateTauriTavernSettings,
     openDialog,
     setDataRoot,
+    initializeBridge,
+    waitUntilWebConnected,
 } = await import(pathToFileURL(tauriBridgePath).href);
 
 test('updateTauriTavernSettings contract validation', async (t) => {
@@ -85,6 +87,78 @@ test('openDialog contract validation', async (t) => {
     });
 
 
+});
+
+test('browser recovery stays silent until a terminal failure requires manual reload', async () => {
+    const keys = ['window', 'document', 'fetch', 'EventSource', 'toastr', 'reportError', 'setTimeout', 'clearTimeout'];
+    const previous = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+    const restoreHost = installHostIdentity({ platform: 'browser', kind: 'web' });
+    const warnings = [], errors = [], timers = new Map();
+    let nextTimer = 0, sessions = 0, nextSource = Promise.withResolvers();
+    class Events {
+        constructor() { nextSource.resolve(this); }
+        close() { this.closed = true; }
+        frame(value) { this.onmessage({ data: JSON.stringify(value), lastEventId: '' }); }
+    }
+    try {
+        globalThis.window = new EventTarget();
+        globalThis.document = new EventTarget();
+        globalThis.document.visibilityState = 'hidden';
+        globalThis.EventSource = Events;
+        globalThis.toastr = { warning: (...args) => warnings.push(args) };
+        globalThis.reportError = error => errors.push(error);
+        globalThis.setTimeout = (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; };
+        globalThis.clearTimeout = id => timers.delete(id);
+        globalThis.fetch = async (url, init) => {
+            if (url === '/__tt/session') {
+                sessions++;
+                return Response.json({ sessionId: `page-${sessions}`, csrfToken: `csrf-${sessions}` });
+            }
+            assert.equal(url, '/__tt/invoke');
+            assert.equal(JSON.parse(init.body).command, 'is_ready');
+            return Response.json(true);
+        };
+        const initial = initializeBridge();
+        const first = await nextSource.promise;
+        first.frame({ type: 'ready', sessionId: 'page-1' });
+        await initial;
+
+        nextSource = Promise.withResolvers();
+        first.onerror(); // A background connection loss is recovered, not a user action request.
+        assert.deepEqual(warnings, []);
+        const [id, timer] = [...timers.entries()][0];
+        timers.delete(id);
+        timer.callback();
+        const resumed = await nextSource.promise;
+        globalThis.document.visibilityState = 'visible';
+        globalThis.document.dispatchEvent(new Event('visibilitychange'));
+        resumed.frame({ type: 'ready', sessionId: 'page-1' });
+        await waitUntilWebConnected();
+        assert.deepEqual(warnings, []);
+
+        nextSource = Promise.withResolvers();
+        resumed.frame({ type: 'session-reset', reason: 'expired' });
+        const replacement = await nextSource.promise;
+        replacement.frame({ type: 'ready', sessionId: 'page-2' });
+        await waitUntilWebConnected();
+        assert.deepEqual(warnings, [], 'Successful automatic session replacement is not a reload request');
+
+        replacement.frame({ type: 'heartbeat', sessionId: 'wrong-page' });
+        await assert.rejects(waitUntilWebConnected(), /another session/);
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0][0], /手动刷新/);
+        assert.equal(warnings[0][2].timeOut, 0);
+        assert.equal(errors.length, 1, 'The fatal error remains reported, not swallowed');
+        assert.equal(timers.size, 0);
+        replacement.onerror();
+        assert.equal(warnings.length, 1, 'Late callbacks must not repeat the reload notice');
+    } finally {
+        restoreHost();
+        for (const [key, descriptor] of previous) {
+            if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+            else delete globalThis[key];
+        }
+    }
 });
 
 test('setDataRoot contract validation', async (t) => {
