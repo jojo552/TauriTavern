@@ -145,6 +145,31 @@ export async function readBrowserChatCompletion(jobId, afterSeq, signal) {
     return value;
 }
 
+export async function startBrowserChatCompletion(payload, presentation, signal) {
+    const jobId = presentation.jobId;
+    try {
+        await invoke('start_chat_completion_job', { jobId, dto: payload, presentation }, { signal });
+    } catch (error) {
+        if (!isWebConnectionError(error) && !isWebSessionResetError(error)) throw error;
+        if (isWebConnectionError(error)) recoverWebConnection();
+        await waitUntilWebConnected({ signal });
+        // A lost confirmation is queried by the preassigned ID, never by another model start.
+        await queryBrowserChatCompletion('attach_chat_completion_job', { jobId }, signal);
+    }
+    return jobId;
+}
+
+export async function generateBrowserChatCompletion(payload, presentation, signal) {
+    const cancel = () => { void cancelBrowserChatCompletion(presentation.jobId).catch(console.warn); };
+    signal?.addEventListener('abort', cancel, { once: true });
+    try {
+        await startBrowserChatCompletion(payload, presentation, signal);
+        return await waitBrowserChatCompletionResult(presentation.jobId, signal);
+    } finally {
+        signal?.removeEventListener('abort', cancel);
+    }
+}
+
 export async function cancelBrowserChatCompletion(jobId) {
     await invoke('cancel_chat_completion_job', { jobId });
     forgetJob(jobId);

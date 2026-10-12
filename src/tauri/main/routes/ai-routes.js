@@ -6,8 +6,8 @@ import { createGenerationLifecycleService } from '../services/ai/generation-life
 import { createGenerationStatusBridge } from '../services/ai/generation-status-bridge.js';
 import { consumeChatCompletionStream } from '../services/ai/chat-completion-stream-consumer.js';
 import { createBrowserNotificationInvoke, createSystemNotificationService } from '../services/notifications/system-notification-service.js';
-import { isWebHost, invoke, isWebConnectionError, isWebSessionResetError, recoverWebConnection, waitUntilWebConnected } from '../../../tauri-bridge.js';
-import { readBrowserChatCompletion, waitBrowserChatCompletionResult, queryBrowserChatCompletion, cancelBrowserChatCompletion, BrowserGenerationDetachedError } from '../../../web/chat-completion-jobs.js';
+import { isWebHost, invoke } from '../../../tauri-bridge.js';
+import { startBrowserChatCompletion, generateBrowserChatCompletion, readBrowserChatCompletion, waitBrowserChatCompletionResult, cancelBrowserChatCompletion, BrowserGenerationDetachedError } from '../../../web/chat-completion-jobs.js';
 import {
     asUpstreamFailureDetails,
     buildLegacyErrorPayload,
@@ -394,32 +394,6 @@ async function invokeChatCompletionWithAbort(context, payload, signal) {
     }
 }
 
-async function startBrowserJob(payload, presentation, signal) {
-    const jobId = presentation.jobId;
-    try {
-        await invoke('start_chat_completion_job', { jobId, dto: payload, presentation }, { signal });
-    } catch (error) {
-        if (!isWebConnectionError(error) && !isWebSessionResetError(error)) throw error;
-        if (isWebConnectionError(error)) recoverWebConnection();
-        await waitUntilWebConnected({ signal });
-        // Confirmation was lost. Query the preassigned ID, never repeat the model start.
-        await queryBrowserChatCompletion('attach_chat_completion_job', { jobId }, signal);
-    }
-    return jobId;
-}
-
-async function invokeBrowserJobWithAbort(payload, presentation, signal) {
-    await attachOpenCodeStableChatId(payload);
-    const cancel = () => { void cancelBrowserChatCompletion(presentation.jobId).catch(console.warn); };
-    signal?.addEventListener('abort', cancel, { once: true });
-    try {
-        await startBrowserJob(payload, presentation, signal);
-        return await waitBrowserChatCompletionResult(presentation.jobId, signal);
-    } finally {
-        signal?.removeEventListener('abort', cancel);
-    }
-}
-
 async function createChatCompletionStreamResponse(context, payload, signal, lifecycle, presentation = null, attached = false) {
     if (!attached) await attachOpenCodeStableChatId(payload);
     const streamId = presentation?.jobId ?? createStreamId();
@@ -626,7 +600,7 @@ async function createChatCompletionStreamResponse(context, payload, signal, life
 
             try {
                 if (!attached) {
-                    if (presentation) await startBrowserJob(payload, presentation, stopped.signal);
+                    if (presentation) await startBrowserChatCompletion(payload, presentation, stopped.signal);
                     else await context.safeInvoke('start_chat_completion_stream', {
                         streamId,
                         dto: payload,
@@ -753,8 +727,9 @@ export function registerAiRoutes(router, context, { jsonResponse }) {
                 return await createChatCompletionStreamResponse(context, payload, init?.signal, lifecycle, presentation);
             }
 
+            if (presentation) await attachOpenCodeStableChatId(payload);
             const completion = presentation
-                ? await invokeBrowserJobWithAbort(payload, presentation, init?.signal)
+                ? await generateBrowserChatCompletion(payload, presentation, init?.signal)
                 : await invokeChatCompletionWithAbort(context, payload, init?.signal);
             await lifecycle.finish({ success: true });
             const response = jsonResponse(completion || {});
