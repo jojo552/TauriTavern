@@ -32,7 +32,6 @@ export function createWebTransport({
     fetch = globalThis.fetch?.bind(globalThis),
     EventSource = globalThis.EventSource,
     onError = error => globalThis.reportError ? globalThis.reportError(error) : console.error(error),
-    onState = () => {},
     schedule = globalThis.setTimeout,
     unschedule = globalThis.clearTimeout,
     now = Date.now,
@@ -51,9 +50,7 @@ export function createWebTransport({
     stopped.promise.catch(() => {});
 
     function state(value) {
-        if (connectionState === value) return;
         connectionState = value;
-        onState(value);
     }
 
     function clearConnectionTimer() {

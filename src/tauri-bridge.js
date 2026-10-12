@@ -17,15 +17,9 @@ let webTransport;
 function getWebTransport() {
     if (!isWebHost()) throw new Error('Web transport requires an explicit browser/web host identity');
     if (webTransport) return webTransport;
-    webTransport = createWebTransport({
-        onState(state) {
-            // Recoverable disconnects and automatic session replacement stay silent.
-            // Operation errors still propagate separately; only a stopped transport needs reload.
-            if (state === 'failed') {
-                globalThis.toastr?.warning?.('无法自动恢复连接，请手动刷新页面重试。', '需要刷新页面', { timeOut: 0, extendedTimeOut: 0 });
-            }
-        },
-    });
+    // Recoverable disconnects and session replacement are silent, as in Luke. Operations report
+    // their own failures; a stopped transport reports through the shared error channel.
+    webTransport = createWebTransport();
     return webTransport;
 }
 

@@ -89,7 +89,7 @@ test('openDialog contract validation', async (t) => {
 
 });
 
-test('browser recovery stays silent until a terminal failure requires manual reload', async () => {
+test('browser recovery shows no connection-level toast, only the shared error report when stopped', async () => {
     const keys = ['window', 'document', 'fetch', 'EventSource', 'toastr', 'reportError', 'setTimeout', 'clearTimeout'];
     const previous = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
     const restoreHost = installHostIdentity({ platform: 'browser', kind: 'web' });
@@ -145,13 +145,11 @@ test('browser recovery stays silent until a terminal failure requires manual rel
 
         replacement.frame({ type: 'heartbeat', sessionId: 'wrong-page' });
         await assert.rejects(waitUntilWebConnected(), /another session/);
-        assert.equal(warnings.length, 1);
-        assert.match(warnings[0][0], /手动刷新/);
-        assert.equal(warnings[0][2].timeOut, 0);
+        assert.deepEqual(warnings, [], 'The transport adds no connection-level toast, even when it stops');
         assert.equal(errors.length, 1, 'The fatal error remains reported, not swallowed');
         assert.equal(timers.size, 0);
         replacement.onerror();
-        assert.equal(warnings.length, 1, 'Late callbacks must not repeat the reload notice');
+        assert.equal(errors.length, 1, 'Late callbacks must not report the stopped transport again');
     } finally {
         restoreHost();
         for (const [key, descriptor] of previous) {

@@ -9,7 +9,7 @@ import { registerSettingsRoutes } from '../src/tauri/main/routes/settings-routes
 import { jsonResponse } from '../src/tauri/main/http-utils.js';
 
 function harness() {
-    const calls = [], errors = [], states = [], streams = [], timers = new Map();
+    const calls = [], errors = [], streams = [], timers = new Map();
     let clock = 0, nextTimer = 0;
     const window = new EventTarget(), document = new EventTarget();
     document.visibilityState = 'visible';
@@ -42,7 +42,7 @@ function harness() {
     }
     const transport = createWebTransport({
         EventSource: Events,
-        onError: error => errors.push(error), onState: state => states.push(state),
+        onError: error => errors.push(error),
         now: () => clock, window, document,
         schedule: (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, at: clock + delay }); return id; },
         unschedule: id => timers.delete(id),
@@ -72,7 +72,7 @@ function harness() {
         await started;
         return next;
     }
-    return { transport, calls, errors, states, streams, timers, reset, streamReady: streamReady.promise, ready,
+    return { transport, calls, errors, streams, timers, reset, streamReady: streamReady.promise, ready,
         window, document, emit, advance, runNextTimer, jump: ms => { clock += ms; },
         reply: handler => { reply = handler; }, sessionReply: handler => { sessionReply = handler; } };
 }
@@ -152,7 +152,6 @@ test('session initialization retries only network loss on the shared backoff and
     await Promise.all([started, connected, invoking]);
     assert.equal(h.calls.filter(call => call.url === '/__tt/invoke').length, 1);
     assert.equal(h.calls.at(-1).headers.get('x-tt-csrf'), 'csrf-4');
-    assert.deepEqual(h.states, ['reconnecting', 'connected']);
     assert.deepEqual(h.errors, []);
     assert.equal(h.timers.size, 1);
 });
