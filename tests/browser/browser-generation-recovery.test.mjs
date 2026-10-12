@@ -53,7 +53,7 @@ test('browser generation recovery uses the normal decoder, message finalization 
     window.happyDOM.settings.timer.maxIntervalTime = 0;
     const payloads = new Map(), readers = new Map(), commits = new Map(), jobs = new Map();
     const calls = [], timeline = [], events = [], warnings = [], errors = [];
-    let nextId = 1, finishGate, attachGate, ackError, sideEffects = 0;
+    let nextId = 1, finishGate, attachGate, ackError, finishError, sideEffects = 0;
     let webSession;
     const sourceCreated = Promise.withResolvers();
     const sessionClosed = Promise.withResolvers();
@@ -77,6 +77,11 @@ test('browser generation recovery uses the normal decoder, message finalization 
             case 'chat_history_generation_finished':
             case 'prune_agent_chat_persistent_states': return null;
             case 'get_character_chat_integrity': return records(payloads.get(args.fileName))[0].chat_metadata.integrity;
+            case 'get_character_chat_summary': return { message_count: records(payloads.get(args.fileName)).length - 1 };
+            case 'get_chat_payload_tail': return {
+                lines: records(payloads.get(args.fileName)).slice(1).slice(-args.maxLines).map(message => JSON.stringify(message)),
+                cursor: null, hasMoreBefore: false,
+            };
             case 'get_chat_payload_path': return args.fileName;
             case 'plugin:fs|open': return openReader(payloads.get(args.path));
             case 'plugin:fs|fstat': return { size: readers.get(args.rid).length };
@@ -119,6 +124,7 @@ test('browser generation recovery uses the normal decoder, message finalization 
                     finishGate.entered.resolve();
                     await finishGate.release.promise;
                 }
+                if (finishError && args.commitReason === 'generationCheckpoint') throw finishError;
                 if (!commit.operation.force && records(text)[0].chat_metadata.integrity !== records(payloads.get(fileName))[0].chat_metadata.integrity) {
                     throw { BadRequest: 'integrity' };
                 }
@@ -257,7 +263,9 @@ test('browser generation recovery uses the normal decoder, message finalization 
             assert.equal(count('cancel_chat_completion_job'), 0);
         }
         async function prepare(stream, withTool = false) {
-            finishGate = attachGate = ackError = undefined;
+            finishGate = attachGate = ackError = finishError = undefined;
+            await main.waitForGenerationIdle();
+            assert.equal(main.is_send_press, false, 'Previous recovery must release the UI generation gate');
             jobs.clear();
             window.localStorage.removeItem('tt:web:pending-completions');
             await main.clearChat({ clearData: true });
@@ -296,6 +304,10 @@ test('browser generation recovery uses the normal decoder, message finalization 
             // Current settings/speaker are deliberately not the original request facts.
             Object.assign(openai.oai_settings, { chat_completion_source: 'claude', claude_model: 'different-current-model', show_thoughts: false });
             main.setCharacterName('Different current speaker');
+            assert.equal(main.is_send_press, false);
+            assert.equal(main.isChatSaving, false);
+            assert.equal(main.getCurrentChatId(), 'target-chat');
+            assert.deepEqual(plain(window.__TAURITAVERN__.api.chat.current.ref()), plain(presentation.chatRef));
             clearAudit();
             return job;
         }
@@ -345,6 +357,8 @@ test('browser generation recovery uses the normal decoder, message finalization 
             ackError = { InternalServerError: 'ACK confirmation unavailable' };
             await main.recoverBrowserGeneration();
             const saved = payloads.get('target-chat');
+            assert.equal(records(saved).at(-1).mes, TEXT, JSON.stringify(calls));
+            assert.equal(count('acknowledge_chat_completion_job'), 1);
             assert.ok(jobs.has(job.jobId));
             assert.ok(warnings.length > 0);
             ackError = undefined;
@@ -357,6 +371,28 @@ test('browser generation recovery uses the normal decoder, message finalization 
             assert.equal(count('acknowledge_chat_completion_job'), 1);
             assert.deepEqual(events, []);
             assert.equal(jobs.has(job.jobId), false);
+            assertNoRestartOrSideEffects();
+        });
+
+        await context.test('a live completed marker after failed saving cannot release the only retained result', async () => {
+            const job = await prepare(false);
+            const before = payloads.get('target-chat');
+            finishError = { InternalServerError: 'Completion publish failed' };
+            await assert.rejects(main.recoverBrowserGeneration(), /publish failed/);
+            assert.equal(main.chat.at(-1).extra.tauritavern.browserGeneration.completed, true);
+            assert.equal(payloads.get('target-chat'), before);
+            clearAudit();
+            // A live content refresh (e.g. regex) must not turn a failed save into an ACK.
+            await assert.rejects(main.recoverBrowserGeneration(), /尚未确认保存/);
+            assert.equal(count('acknowledge_chat_completion_job'), 0);
+            assert.ok(jobs.has(job.jobId));
+            assert.equal(payloads.get('target-chat'), before);
+            finishError = undefined;
+            await main.reloadCurrentChat();
+            clearAudit();
+            await main.recoverBrowserGeneration();
+            assert.equal(records(payloads.get('target-chat')).at(-1).mes, TEXT);
+            assert.equal(count('acknowledge_chat_completion_job'), 1);
             assertNoRestartOrSideEffects();
         });
 

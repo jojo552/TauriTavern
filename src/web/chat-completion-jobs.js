@@ -3,6 +3,7 @@ import {
     recoverWebConnection, waitUntilWebConnected,
 } from '../tauri-bridge.js';
 import { CHAT_COMMIT_REASON } from '../scripts/chat-payload-transport.js';
+import { hydrateMessageSwipes } from '../scripts/tauri/chat/cold-swipes.js';
 
 const PENDING_KEY = 'tt:web:pending-completions';
 const MAX_PENDING = 16;
@@ -39,20 +40,20 @@ export function sameGenerationChat(a, b) {
         : a.kind === 'group' && a.chatId === b.chatId;
 }
 
-// Hash logical message content, not a cold reader's page-lifetime resource handles.
-// All other fields remain significant: an edited earlier message must block restoration too.
-function canonical(value, coldReference = false) {
+// Hash complete logical messages, including swipes hidden by the page's cold projection.
+function canonical(value) {
     if (Array.isArray(value)) return value.map(item => canonical(item));
     if (!value || typeof value !== 'object') return value;
     if (value instanceof Date) return value.toJSON();
     return Object.fromEntries(Object.keys(value).sort()
-        .filter(key => value[key] !== undefined
-            && !(coldReference && ['sourceId', 'webSourceHandle', 'webSessionEpoch'].includes(key)))
-        .map(key => [key, canonical(value[key], key === 'tt_swipe_cold')]));
+        .filter(key => value[key] !== undefined)
+        .map(key => [key, canonical(value[key])]));
 }
 
 export async function generationChatDigest(messages) {
-    const bytes = new TextEncoder().encode(JSON.stringify(canonical(messages)));
+    const complete = structuredClone(messages);
+    for (const message of complete) await hydrateMessageSwipes(message);
+    const bytes = new TextEncoder().encode(JSON.stringify(canonical(complete)));
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -211,11 +212,23 @@ export async function findBrowserChatCompletionRecovery(chatRef, messages, signa
         }
     }
     for (const job of related) {
-        const completed = messages.some(message => {
+        const completedIndex = messages.findIndex(message => {
             const marker = message.extra?.tauritavern?.browserGeneration;
             return marker?.jobId === job.jobId && marker.completed === true;
         });
-        if (completed) {
+        if (completedIndex >= 0) {
+            // CHAT_CHANGED can be a live re-render, not a disk reload. A failed save
+            // leaves a live completed marker; only the persisted result permits release.
+            const saved = await window.__TAURITAVERN__.api.chat.open(chatRef).history.tail({
+                limit: messages.length - completedIndex,
+            });
+            signal?.throwIfAborted();
+            if (!saved.messages.some(message => {
+                const marker = message.extra?.tauritavern?.browserGeneration;
+                return marker?.jobId === job.jobId && marker.completed === true;
+            })) {
+                throw new BrowserGenerationRecoveryError(job.jobId, '旧回复尚未确认保存；任务仍保留，不会覆盖当前聊天。');
+            }
             await queryBrowserChatCompletion('attach_chat_completion_job', { jobId: job.jobId }, signal);
             await acknowledgeBrowserChatCompletion(job.jobId);
             continue;

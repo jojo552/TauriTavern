@@ -5236,12 +5236,18 @@ export function captureBrowserGenerationPresentation() {
     };
 }
 
-let browserRecoveryController;
+let browserRecoveryObserver;
 let browserRecovery = Promise.resolve();
 
 function scheduleBrowserGenerationRecovery() {
     if (!isWebHost()) return;
-    browserRecoveryController?.abort(new BrowserGenerationDetachedError('Chat changed during generation recovery'));
+    if (browserRecoveryObserver) {
+        let ref;
+        try { ref = getActiveChatSnapshot().ref; } catch { /* Leaving a durable chat. */ }
+        // CHAT_CHANGED also covers live re-renders. Keep the observer for the same chat.
+        if (sameGenerationChat(browserRecoveryObserver.ref, ref)) return;
+        browserRecoveryObserver.controller.abort(new BrowserGenerationDetachedError('Chat changed during generation recovery'));
+    }
     browserRecovery = browserRecovery.catch(() => {}).then(recoverBrowserGeneration).catch(error => {
         if (error instanceof BrowserGenerationDetachedError || error?.name === 'AbortError') return;
         console.error('Browser generation recovery failed', error);
@@ -5263,12 +5269,12 @@ function scheduleBrowserGenerationRecovery() {
 
 /** Reattach a response, never re-enter prompt preparation, slash commands or model start. */
 export async function recoverBrowserGeneration() {
-    if (!isWebHost() || generationInFlightCount || is_send_press || is_group_generating || hasActiveAgentRun()) return;
+    if (!isWebHost() || browserRecoveryObserver || generationInFlightCount || is_send_press || is_group_generating || hasActiveAgentRun()) return;
     let ref;
     try { ref = getActiveChatSnapshot().ref; }
     catch { return; } // No durable chat is selected, including the welcome/temporary view.
     const controller = new AbortController();
-    browserRecoveryController = controller;
+    browserRecoveryObserver = { controller, ref };
     let entered = false;
     let processor;
     let recoveryJobId;
@@ -5368,7 +5374,7 @@ export async function recoverBrowserGeneration() {
             if (!processor && stillSelected()) unblockGeneration('normal');
             await exitGeneration();
         }
-        if (browserRecoveryController === controller) browserRecoveryController = null;
+        if (browserRecoveryObserver?.controller === controller) browserRecoveryObserver = null;
     }
 }
 
