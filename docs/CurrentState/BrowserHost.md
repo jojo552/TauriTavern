@@ -54,9 +54,9 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 - 宿主最多保留 16 个未确认 job，创建起固定 2 小时到期，由后台每分钟回收并取消尚在运行的任务。流保留完整序列化回放，最多 16 MiB/8192 帧，超限显式失败，不滚动丢失历史；非流结果最多 16 MiB，presentation/error 最多 32 KiB。这些是保留数据预算，不是进程瞬时总内存保证。
 - 每个任务同一时刻仅附着一个页面，重复同页 attach 幂等；page bus 关闭立即撤销旧 reader lease，迟到 read/ACK 不得命中新附着。页面重建可声明 attach 后同 cursor 继续安全查询，命令和写请求本身不自动重放。
-- 重新打开聊天时，以目标、原始全消息内容摘要和追加位置核对基线，再把旧响应送入同一 provider decoder 与 StreamingProcessor 完成/保存管线，不重入 Generate 的命令、删消息、提示词构建或模型 start。原 speaker/provider/model/reasoning/signature 保留。聊天被修改或已有无法证明来源的已保存 partial 时停止自动恢复，保留结果并提示；提示可经用户确认取消旧 job，不猜测覆盖。内容摘要不是跨页面并发写入的存储 CAS。
+- 重新打开聊天时，以目标、原始全消息内容摘要（克隆后水合冷 swipe，包含隐藏历史）和追加位置核对基线，再把旧响应送入同一 provider decoder 与 StreamingProcessor 完成/保存管线，不重入 Generate 的命令、删消息、提示词构建或模型 start。原 speaker/provider/model/reasoning/signature 保留。聊天被修改或已有无法证明来源的已保存 partial 时停止自动恢复，保留结果并提示；提示可经用户确认取消旧 job，不猜测覆盖。内容摘要不是跨页面并发写入的存储 CAS。
 - 恢复不重发历史 STREAM_TOKEN_RECEIVED，不自动执行工具、auto-swipe 或 auto-continue。正常首次生成原行为保留；工具轮已保存的 transcript 确认后才释放上一 job。恢复遇工具结果保留任务并要求用户处理，不把断链恢复当成副作用续跑。
-- 最终消息携带 `extra.tauritavern.browserGeneration={jobId,completed:true}`，沿既有 final events → chat save → job ACK 完成。再次从盘加载到完成标记只确认释放，不重复应用回复或事件。事件到保存之间崩溃仍可能使扩展完成事件重复，不能声称跨崩溃 exactly-once；聊天保存失败/拒绝覆盖不得 ACK。任务不会独立自动写聊天，关闭页后的结果等重开、核对并保存后才发布。
+- 最终消息携带 `extra.tauritavern.browserGeneration={jobId,completed:true}`，沿既有 final events → chat save → job ACK 完成。再次发现完成标记会通过既有聊天 history API 核对实际落盘标记后才确认释放，不重复应用回复或事件；CHAT_CHANGED 可能只是同页内容刷新，既不证明保存成功，也不无条件中止同聊天的附着。事件到保存之间崩溃仍可能使扩展完成事件重复，不能声称跨崩溃 exactly-once；聊天保存失败/拒绝覆盖不得 ACK。任务不会独立自动写聊天，关闭页后的结果等重开、核对并保存后才发布。
 - 浏览器仅持久记录 jobId/chatRef 发现索引，不记录提示词、聊天全文或凭据。服务器进程重启销毁内存任务，旧索引让失效可见；不自动重新生成。Agent run/checkpoint/live UI 的生命周期与此独立，不能由普通生成恢复推出 Agent 自动续跑。
 
 ## 4. 文件传输与隔离边界

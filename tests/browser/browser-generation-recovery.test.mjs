@@ -76,6 +76,7 @@ test('browser generation recovery uses the normal decoder, message finalization 
             case 'chat_history_generation_started':
             case 'chat_history_generation_finished':
             case 'prune_agent_chat_persistent_states': return null;
+            case 'count_openai_tokens_batch': return { token_counts: args.dto.requests.map(() => 8) };
             case 'get_character_chat_integrity': return records(payloads.get(args.fileName))[0].chat_metadata.integrity;
             case 'get_character_chat_summary': return { message_count: records(payloads.get(args.fileName)).length - 1 };
             case 'get_chat_payload_tail': return {
@@ -245,7 +246,12 @@ test('browser generation recovery uses the normal decoder, message finalization 
         await connecting;
 
         for (const name of ['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED', 'STREAM_TOKEN_RECEIVED', 'GENERATION_STARTED']) {
-            main.eventSource.on(main.event_types[name], (...args) => events.push({ name, args: plain(args) }));
+            main.eventSource.on(main.event_types[name], (...args) => {
+                // Chat/settings refresh legitimately assembles token-count previews.
+                // Only real generation starts can execute continuation or a model call.
+                if (name === 'GENERATION_STARTED' && args[2] === true) return;
+                events.push({ name, args: plain(args) });
+            });
         }
         ToolManager.registerFunctionTool({
             name: TOOL.function.name, description: 'Observable recovery side-effect probe',

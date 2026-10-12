@@ -544,6 +544,19 @@ test('chat persistence and navigation', async (context) => {
                 assert.equal(main.ensureSwipes(message), false);
                 assert.equal(message.swipes[0], null);
                 assert.equal(message.variables[message.swipe_id].score, 1);
+                const { generationChatDigest } = getModule('web/chat-completion-jobs.js').namespace;
+                const warm = structuredClone(main.chat);
+                warm[0].swipes = original[1].swipes;
+                warm[0].swipe_info = original[1].swipe_info;
+                delete warm[0].tt_swipe_cold;
+                const digest = await generationChatDigest(main.chat);
+                assert.equal(digest, await generationChatDigest(warm), 'Warm and cold projections have one logical baseline');
+                assert.equal(message.swipes[0], null, 'Digesting must not hydrate the live projection');
+                const sourceMessage = swipeSources.get(message.tt_swipe_cold.sourceId)[1];
+                sourceMessage.swipes[0] = 'edited hidden swipe';
+                assert.notEqual(digest, await generationChatDigest(main.chat), 'Hidden swipe edits change the recovery baseline');
+                sourceMessage.swipes[0] = 'older';
+                swipeReads.length = 0;
                 message.variables[message.swipe_id].score = 9;
 
                 swipeReadError = new Error('source read failed');

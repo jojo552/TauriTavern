@@ -104,6 +104,7 @@ import {
 import { humanizedDateTime, favsToHotswap, getMessageTimeStamp, dragElement, isMobile, initRossMods, autoloadLastChat } from './scripts/RossAscends-mods.js';
 import { markBrowserChatCompletionMessage, acknowledgeBrowserChatCompletion, findBrowserChatCompletionRecovery, sameGenerationChat, assertBrowserChatCompletionBaseline, queryBrowserChatCompletion, cancelBrowserChatCompletion, BrowserGenerationDetachedError, BrowserGenerationRecoveryError } from './web/chat-completion-jobs.js';
 import { createRecoveredChatCompletionResponse } from './tauri/main/routes/ai-routes.js';
+import { getUserFacingErrorMessage } from './tauri/main/routes/ai-error-presenter.js';
 import { userStatsHandler, statMesProcess, initStats } from './scripts/stats.js';
 import {
     generateKoboldWithStreaming,
@@ -5269,7 +5270,11 @@ function scheduleBrowserGenerationRecovery() {
 
 /** Reattach a response, never re-enter prompt preparation, slash commands or model start. */
 export async function recoverBrowserGeneration() {
-    if (!isWebHost() || browserRecoveryObserver || generationInFlightCount || is_send_press || is_group_generating || hasActiveAgentRun()) return;
+    if (!isWebHost() || browserRecoveryObserver || is_send_press || is_group_generating || hasActiveAgentRun()) return;
+    // Chat loading also schedules prompt-assembly dry runs. Their temporary gate
+    // must delay recovery, not silently discard its only CHAT_CHANGED attempt.
+    await waitForGenerationIdle();
+    if (browserRecoveryObserver || is_send_press || is_group_generating || hasActiveAgentRun()) return;
     let ref;
     try { ref = getActiveChatSnapshot().ref; }
     catch { return; } // No durable chat is selected, including the welcome/temporary view.
@@ -5286,12 +5291,15 @@ export async function recoverBrowserGeneration() {
     };
     try {
         const job = await findBrowserChatCompletionRecovery(ref, chat, controller.signal);
+        await waitForGenerationIdle();
         controller.signal.throwIfAborted();
-        if (!job || !stillSelected() || generationInFlightCount || is_send_press) return;
+        if (!job || !stillSelected() || is_send_press || is_group_generating || hasActiveAgentRun()) return;
         recoveryJobId = job.jobId;
         await assertBrowserChatCompletionBaseline(job.presentation, ref, chat);
+        await waitForGenerationIdle();
         controller.signal.throwIfAborted();
         if (!stillSelected()) throw new BrowserGenerationDetachedError('Chat changed during generation recovery');
+        if (is_send_press || is_group_generating || hasActiveAgentRun()) return;
         setSendButtonState(true);
         await enterGeneration(false);
         entered = true;
@@ -5358,7 +5366,7 @@ export async function recoverBrowserGeneration() {
         // Faults/navigation detach the observer, not the independently running model task.
         if (!controller.signal.aborted) controller.abort(new BrowserGenerationDetachedError(error?.message || String(error)));
         if (recoveryJobId && !(error instanceof BrowserGenerationDetachedError) && error?.name !== 'AbortError') {
-            throw new BrowserGenerationRecoveryError(recoveryJobId, error?.message || String(error));
+            throw new BrowserGenerationRecoveryError(recoveryJobId, getUserFacingErrorMessage(error));
         }
         throw error;
     } finally {

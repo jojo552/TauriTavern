@@ -1,4 +1,4 @@
-import { stripCommandErrorPrefixes } from '../../../scripts/util/command-error-utils.js';
+import { extractErrorText, stripCommandErrorPrefixes } from '../../../scripts/util/command-error-utils.js';
 import { translateSillyTavern } from '../adapters/st/sillytavern-i18n.js';
 import {
     asUpstreamFailureDetails,
@@ -9,15 +9,7 @@ import {
 export { asUpstreamFailureDetails };
 
 export function getErrorMessage(error) {
-    if (!error) {
-        return 'Unknown error';
-    }
-
-    if (typeof error === 'string') {
-        return error;
-    }
-
-    return error.message || error.toString?.() || 'Unknown error';
+    return extractErrorText(error) || 'Unknown error';
 }
 
 export function getUpstreamFailureDetails(error) {
