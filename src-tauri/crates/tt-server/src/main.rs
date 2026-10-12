@@ -1,5 +1,6 @@
 //! Native browser host: no Tauri, WebView, display server or parallel business backend.
 mod ai;
+mod ai_jobs;
 mod backend_errors;
 mod commands;
 mod downloads;
@@ -234,6 +235,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         ),
         downloads: Default::default(),
+        ai_jobs: Default::default(),
         archives,
         backend_errors,
         backend_logs,
@@ -275,6 +277,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         host::close_session(&expiry_host, session).await;
                     }
                     expiry_host.downloads.expire().await;
+                    expiry_host.ai_jobs.expire(&expiry_host.services).await;
                 }
             }
         }

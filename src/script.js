@@ -11,7 +11,7 @@ import {
     default as libs,
     lodash,
 } from './lib.js';
-import { getClientVersion as getBridgeClientVersion, getTauriTavernSettings, invoke, updateTauriTavernSettings } from './tauri-bridge.js';
+import { getClientVersion as getBridgeClientVersion, getTauriTavernSettings, invoke, updateTauriTavernSettings, isWebHost } from './tauri-bridge.js';
 import { SILLYTAVERN_COMPAT_VERSION } from './compat-version.js';
 import { getPromptCacheUsage } from './scripts/util/prompt-cache-usage.js';
 import { formatGenerationTimer, updateMessageGenerationInfo } from './scripts/message-generation-info.js';
@@ -102,6 +102,8 @@ import {
 } from './scripts/tauri/setting/settings-persistence.js';
 
 import { humanizedDateTime, favsToHotswap, getMessageTimeStamp, dragElement, isMobile, initRossMods, autoloadLastChat } from './scripts/RossAscends-mods.js';
+import { markBrowserChatCompletionMessage, acknowledgeBrowserChatCompletion, findBrowserChatCompletionRecovery, sameGenerationChat, assertBrowserChatCompletionBaseline, queryBrowserChatCompletion, cancelBrowserChatCompletion, BrowserGenerationDetachedError, BrowserGenerationRecoveryError } from './web/chat-completion-jobs.js';
+import { createRecoveredChatCompletionResponse } from './tauri/main/routes/ai-routes.js';
 import { userStatsHandler, statMesProcess, initStats } from './scripts/stats.js';
 import {
     generateKoboldWithStreaming,
@@ -203,6 +205,8 @@ import {
     setupChatCompletionPromptManager,
     prepareOpenAIMessages,
     sendOpenAIRequest,
+    parseChatCompletionResponse,
+    parseChatCompletionLogprobs,
     loadOpenAISettings,
     oai_settings,
     openai_messages_count,
@@ -4319,6 +4323,10 @@ class StreamingProcessor {
         this.isStopped = false;
         this.isFinished = false;
         this.generator = this.nullStreamingGeneration;
+        this.browserJobId = null;
+        this.recovered = false;
+        this.groupGenerationId = null;
+        this.assertPresentation = () => {};
         this.abortController = new AbortController();
         this.firstMessageText = '...';
         this.timeStarted = timeStarted;
@@ -4381,9 +4389,11 @@ class StreamingProcessor {
             this.sendTextarea.value = '';
             this.sendTextarea.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
-            await saveReply({ type: this.type, getMessage: text, fromStreaming: true });
+            await saveReply({ type: this.type, getMessage: text, fromStreaming: true, assertPresentation: this.assertPresentation });
             messageId = chat.length - 1;
+            if (this.recovered && selected_group) chat[messageId].extra.gen_id = this.groupGenerationId;
             await this.#checkDomElements(messageId, continueOnReasoning);
+            this.assertPresentation();
             delete chat[messageId].extra.token_count;
             $(this.messageDom).find('.mes_generation_info, .tokenCounterDisplay').empty();
             this.markUIGenStarted();
@@ -4394,6 +4404,7 @@ class StreamingProcessor {
     }
 
     async onProgressStreaming(messageId, text, isFinal) {
+        this.assertPresentation();
         const isImpersonate = this.type == 'impersonate';
         const isContinue = this.type == 'continue';
 
@@ -4431,6 +4442,7 @@ class StreamingProcessor {
         } else {
             const mesChanged = chat[messageId].mes !== processedText;
             await this.#checkDomElements(messageId);
+            this.assertPresentation();
             const currentTime = new Date();
             chat[messageId].mes = processedText;
             chat[messageId].gen_started = this.timeStarted;
@@ -4448,6 +4460,7 @@ class StreamingProcessor {
             // Token count update.
             const tokenCountText = this.reasoningHandler.reasoning + processedText;
             const currentTokenCount = isFinal && shouldCountMessageTokens() ? await getTokenCountAsync(tokenCountText, 0) : 0;
+            this.assertPresentation();
             if (currentTokenCount) {
                 chat[messageId].extra.token_count = currentTokenCount;
                 if (this.messageTokenCounterDom instanceof HTMLElement) {
@@ -4590,16 +4603,23 @@ class StreamingProcessor {
     }
 
     async onFinishStreaming(messageId, text) {
+        this.assertPresentation();
+        markBrowserChatCompletionMessage(chat[messageId], this.browserJobId);
         await this.finalizeIntermediaryMessage(messageId, text, { unlockUI: true });
+        this.assertPresentation();
 
-        const isAborted = this.abortController.signal.aborted;
-        if (!isAborted && power_user.auto_swipe && generatedTextFiltered(text)) {
+        const autoSwipe = !this.recovered && !this.abortController.signal.aborted
+            && power_user.auto_swipe && generatedTextFiltered(text);
+        if (autoSwipe && !this.browserJobId) {
             return await swipe(null, SWIPE_DIRECTION.RIGHT, { source: SWIPE_SOURCE.AUTO_SWIPE, repeated: true, forceMesId: chat.length - 1 });
         }
         await saveChatConditional(this.type === 'impersonate'
             ? CHAT_COMMIT_REASON.MUTATION
             : CHAT_COMMIT_REASON.GENERATION_CHECKPOINT);
-
+        await acknowledgeBrowserChatCompletion(this.browserJobId);
+        if (autoSwipe) {
+            return await swipe(null, SWIPE_DIRECTION.RIGHT, { source: SWIPE_SOURCE.AUTO_SWIPE, repeated: true, forceMesId: chat.length - 1 });
+        }
         playMessageSound();
     }
 
@@ -4633,6 +4653,12 @@ class StreamingProcessor {
     }
 
     onStopStreaming() {
+        if (this.recovered && this.browserJobId) {
+            void cancelBrowserChatCompletion(this.browserJobId).catch(error => {
+                console.warn('Browser generation cancellation was not confirmed', error);
+                toastr.warning('取消旧生成未确认；不会自动重发取消请求。');
+            });
+        }
         this.abortController.abort();
         this.isFinished = true;
     }
@@ -4645,6 +4671,7 @@ class StreamingProcessor {
     }
 
     async generate() {
+        this.assertPresentation();
         if (this.messageId == -1) {
             this.messageId = await this.onStartStreaming(this.firstMessageText);
             await delay(1); // delay for message to be rendered
@@ -4674,6 +4701,10 @@ class StreamingProcessor {
                     return this.result;
                 }
 
+                this.assertPresentation();
+                if (this.recovered && ToolManager.hasToolCalls(toolCalls)) {
+                    throw new Error('旧回复包含工具调用；为避免重复执行，不能自动恢复工具轮。任务仍保留。');
+                }
                 this.toolCalls = toolCalls;
                 this.result = text;
                 this.swipes = Array.from(swipes ?? []);
@@ -4687,7 +4718,7 @@ class StreamingProcessor {
                 this.native = state?.native ?? null;
                 this.requestContext = state?.requestContext ?? null;
                 this.promptCache = getPromptCacheUsage(state?.usage);
-                await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
+                if (!this.recovered) await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
                 sw.interval = getStreamingRenderInterval({
                     configuredFps: streamingFps,
                     hidden: document.hidden,
@@ -4697,6 +4728,7 @@ class StreamingProcessor {
             const seconds = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
             console.warn(`Stream stats: ${timestamps.length} tokens, ${seconds.toFixed(2)} seconds, rate: ${Number(timestamps.length / seconds).toFixed(2)} TPS`);
         } catch (err) {
+            if (this.recovered) throw err;
             // in the case of a self-inflicted abort, we have already cleaned up
             if (!this.isFinished) {
                 console.error(err);
@@ -5194,6 +5226,150 @@ function cleanupGenerationAfterUnhandledError(type, dryRun) {
     }
 
     unblockGeneration(type);
+}
+
+export function captureBrowserGenerationPresentation() {
+    return {
+        speaker: name2,
+        characterAvatar: characters[this_chid]?.avatar ?? null,
+        groupGenerationId: selected_group ? group_generation_id : null,
+    };
+}
+
+let browserRecoveryController;
+let browserRecovery = Promise.resolve();
+
+function scheduleBrowserGenerationRecovery() {
+    if (!isWebHost()) return;
+    browserRecoveryController?.abort(new BrowserGenerationDetachedError('Chat changed during generation recovery'));
+    browserRecovery = browserRecovery.catch(() => {}).then(recoverBrowserGeneration).catch(error => {
+        if (error instanceof BrowserGenerationDetachedError || error?.name === 'AbortError') return;
+        console.error('Browser generation recovery failed', error);
+        toastr.warning(error?.message || String(error), '生成恢复未完成', {
+            timeOut: error.jobId ? 0 : 10000,
+            onclick: error.jobId ? async () => {
+                if (!await callGenericPopup('确认丢弃这条旧生成的结果并取消任务？当前聊天不会被覆盖。', POPUP_TYPE.CONFIRM)) return;
+                try {
+                    await queryBrowserChatCompletion('attach_chat_completion_job', { jobId: error.jobId });
+                    await cancelBrowserChatCompletion(error.jobId);
+                    toastr.success('旧生成已取消，当前聊天未改变。');
+                } catch (failure) {
+                    toastr.error(failure?.message || JSON.stringify(failure), '取消旧生成未确认');
+                }
+            } : undefined,
+        });
+    });
+}
+
+/** Reattach a response, never re-enter prompt preparation, slash commands or model start. */
+export async function recoverBrowserGeneration() {
+    if (!isWebHost() || generationInFlightCount || is_send_press || is_group_generating || hasActiveAgentRun()) return;
+    let ref;
+    try { ref = getActiveChatSnapshot().ref; }
+    catch { return; } // No durable chat is selected, including the welcome/temporary view.
+    const controller = new AbortController();
+    browserRecoveryController = controller;
+    let entered = false;
+    let processor;
+    let recoveryJobId;
+    const previousSpeaker = name2;
+    const previousCharacter = this_chid;
+    const stillSelected = () => {
+        try { return sameGenerationChat(ref, getActiveChatSnapshot().ref); }
+        catch { return false; }
+    };
+    try {
+        const job = await findBrowserChatCompletionRecovery(ref, chat, controller.signal);
+        controller.signal.throwIfAborted();
+        if (!job || !stillSelected() || generationInFlightCount || is_send_press) return;
+        recoveryJobId = job.jobId;
+        await assertBrowserChatCompletionBaseline(job.presentation, ref, chat);
+        controller.signal.throwIfAborted();
+        if (!stillSelected()) throw new BrowserGenerationDetachedError('Chat changed during generation recovery');
+        setSendButtonState(true);
+        await enterGeneration(false);
+        entered = true;
+        await assertBrowserChatCompletionBaseline(job.presentation, getActiveChatSnapshot().ref, chat);
+        controller.signal.throwIfAborted();
+        const baseline = JSON.stringify(chat);
+        const originalMessages = chat.slice();
+        const assertPresentation = () => {
+            if (!stillSelected() || controller.signal.aborted) {
+                throw new BrowserGenerationDetachedError('Chat changed during generation recovery');
+            }
+            if (originalMessages.some((message, index) => chat[index] !== message)
+                || JSON.stringify(chat.slice(0, job.presentation.baseLength)) !== baseline
+                || (processor?.messageId >= 0 && chat.length !== processor.messageId + 1)) {
+                throw new Error('聊天已改变；旧生成仍保留，不会覆盖当前内容。');
+            }
+        };
+        generation_started = new Date(job.presentation.startedAt);
+        if (selected_group) {
+            const index = characters.findIndex(character => character.avatar === job.presentation.characterAvatar);
+            if (index < 0) throw new Error('原群聊角色已不存在，旧生成不能自动写入。');
+            setCharacterId(index);
+        }
+        name2 = job.presentation.speaker;
+        processor = new StreamingProcessor(job.presentation.type, false, generation_started, '', new PromptReasoning());
+        processor.browserJobId = job.jobId;
+        processor.recovered = true;
+        processor.groupGenerationId = job.presentation.groupGenerationId;
+        processor.assertPresentation = assertPresentation;
+        processor.abortController = controller;
+        streamingProcessor = processor;
+        abortController = controller;
+        deactivateSendButtons();
+        const response = await createRecoveredChatCompletionResponse(job, controller.signal);
+        assertPresentation();
+        const parsed = await parseChatCompletionResponse(response, job.presentation.parser);
+        assertPresentation();
+        if (job.stream) processor.generator = parsed;
+        else {
+            if (ToolManager.hasToolCalls(parsed)) {
+                throw new Error('旧回复包含工具调用；为避免重复执行，不能自动恢复工具轮。任务仍保留。');
+            }
+            processor.generator = async function* () {
+                yield {
+                    text: extractMessageFromData(parsed, parsed.requestContext.mainApi),
+                    swipes: extractMultiSwipes(parsed, job.presentation.type),
+                    logprobs: parseChatCompletionLogprobs(parsed, parsed.requestContext),
+                    toolCalls: [],
+                    state: {
+                        reasoning: job.presentation.parser.showThoughts
+                            ? extractReasoningFromData(parsed, { ...parsed.requestContext, ignoreShowThoughts: true }) : '',
+                        images: extractImagesFromData(parsed, parsed.requestContext),
+                        signature: extractReasoningSignatureFromData(parsed, parsed.requestContext),
+                        native: parsed?.choices?.[0]?.message?.native,
+                        requestContext: parsed.requestContext, usage: parsed.usage,
+                    },
+                };
+            };
+        }
+        const text = await processor.generate();
+        assertPresentation();
+        if (processor.isFinished && !processor.isStopped) await processor.onFinishStreaming(processor.messageId, text);
+    } catch (error) {
+        // Faults/navigation detach the observer, not the independently running model task.
+        if (!controller.signal.aborted) controller.abort(new BrowserGenerationDetachedError(error?.message || String(error)));
+        if (recoveryJobId && !(error instanceof BrowserGenerationDetachedError) && error?.name !== 'AbortError') {
+            throw new BrowserGenerationRecoveryError(recoveryJobId, error?.message || String(error));
+        }
+        throw error;
+    } finally {
+        if (streamingProcessor === processor) {
+            streamingProcessor = null;
+            if (stillSelected()) {
+                name2 = previousSpeaker;
+                if (selected_group) setCharacterId(previousCharacter);
+                unblockGeneration('normal');
+            }
+        }
+        if (entered) {
+            if (!processor && stillSelected()) unblockGeneration('normal');
+            await exitGeneration();
+        }
+        if (browserRecoveryController === controller) browserRecoveryController = null;
+    }
 }
 
 async function prepareLegacyMcpGenerationContext() {
@@ -6406,6 +6582,7 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
             }
 
             streamingProcessor.generator = await sendStreamingRequest(type, generate_data, { jsonSchema, allowToolCalls: canAdvertiseToolCalls, toolData, legacyMcpToolRound });
+            streamingProcessor.browserJobId = streamingProcessor.generator.browserJobId;
 
             hideSwipeButtons();
             let getMessage = await streamingProcessor.generate();
@@ -6425,8 +6602,10 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
             if (canPerformToolCalls && isStreamFinished && isStreamWithToolCalls) {
                 const hasToolCalls = ToolManager.hasToolCalls(streamingProcessor.toolCalls);
                 const toolTurnOwner = chat[streamingProcessor.messageId];
+                const browserJobId = streamingProcessor.browserJobId;
                 const reasoningContent = streamingProcessor?.reasoningHandler?.reasoning || null;
                 if (hasToolCalls) {
+                    markBrowserChatCompletionMessage(toolTurnOwner, browserJobId);
                     await streamingProcessor.finalizeIntermediaryMessage(streamingProcessor.messageId, getMessage, { unlockUI: false, hasToolCalls });
                 }
                 let invocationResult;
@@ -6449,6 +6628,10 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
                         if (Array.isArray(invocationResult.errors) && invocationResult.errors.length) {
                             ToolManager.showToolCallError(invocationResult.errors);
                         }
+                        if (browserJobId) {
+                            await saveChatConditional(CHAT_COMMIT_REASON.GENERATION_CHECKPOINT);
+                            await acknowledgeBrowserChatCompletion(browserJobId);
+                        }
                         unblockGeneration(type);
                         streamingProcessor = null;
                         return;
@@ -6458,6 +6641,7 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
                     depth = depth + 1;
                     try {
                         await ToolManager.saveFunctionToolTurn(invocationResult.invocations, toolTurnOwner, reasoningContent);
+                        await acknowledgeBrowserChatCompletion(browserJobId);
                     } finally {
                         clearPendingToolCalls(toolTurnOwner);
                     }
@@ -6580,7 +6764,7 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
         } else {
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
-                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, native, providerReplay, promptCache, hasToolCalls }));
+                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, native, providerReplay, promptCache, hasToolCalls, browserJobId: data.browserJobId }));
             } else {
                 ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, native, providerReplay, promptCache, hasToolCalls }));
             }
@@ -6611,6 +6795,10 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
                     if (Array.isArray(invocationResult.errors) && invocationResult.errors.length) {
                         ToolManager.showToolCallError(invocationResult.errors);
                     }
+                    if (data.browserJobId) {
+                        await saveChatConditional(CHAT_COMMIT_REASON.GENERATION_CHECKPOINT);
+                        await acknowledgeBrowserChatCompletion(data.browserJobId);
+                    }
                     unblockGeneration(type);
                     return;
                 }
@@ -6618,6 +6806,7 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
                 depth = depth + 1;
                 try {
                     await ToolManager.saveFunctionToolTurn(invocationResult.invocations, toolTurnOwner, toolReasoning);
+                    await acknowledgeBrowserChatCompletion(data.browserJobId);
                 } finally {
                     clearPendingToolCalls(toolTurnOwner);
                 }
@@ -6635,14 +6824,20 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
 
         const isAborted = abortController && abortController.signal.aborted;
         if (!isAborted && power_user.auto_swipe && generatedTextFiltered(getMessage)) {
+            if (data.browserJobId) {
+                await saveChatConditional(CHAT_COMMIT_REASON.GENERATION_CHECKPOINT);
+                await acknowledgeBrowserChatCompletion(data.browserJobId);
+            }
             is_send_press = false;
             return await swipe(null, SWIPE_DIRECTION.RIGHT, { source: SWIPE_SOURCE.AUTO_SWIPE, repeated: true, forceMesId: chat.length - 1 });
         }
 
         console.debug('Chat save called by /Generate');
+        markBrowserChatCompletionMessage(chat.at(-1), data.browserJobId);
         await saveChatConditional(isImpersonate
             ? CHAT_COMMIT_REASON.MUTATION
             : CHAT_COMMIT_REASON.GENERATION_CHECKPOINT);
+        await acknowledgeBrowserChatCompletion(data.browserJobId);
         unblockGeneration(type);
         streamingProcessor = null;
 
@@ -8038,12 +8233,14 @@ async function processImageAttachment(message, { imageUrls }) {
  * @property {object?} [providerReplay] Original response text and request connection for provider replay
  * @property {{ input_tokens: number, cached_tokens: number }?} [promptCache] Prompt cache usage for this request
  * @property {boolean} [hasToolCalls] Whether the message owns tool calls
+ * @property {string|null} [browserJobId] Completed browser response identifier, published with this reply.
+ * @property {() => void} [assertPresentation] Reject stale recovery before an asynchronous chat write.
  *
  * @typedef {object} SaveReplyResult
  * @property {string} type Type of generation
  * @property {string} getMessage Generated message
  */
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, native = null, providerReplay = null, promptCache = null, hasToolCalls = false }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, native = null, providerReplay = null, promptCache = null, hasToolCalls = false, browserJobId = null, assertPresentation = () => {} }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
@@ -8060,13 +8257,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         type = 'normal';
     }
 
-    if (chat.length && (!lastMessage.extra || typeof lastMessage.extra !== 'object')) {
-        lastMessage.extra = {};
-    }
-
-    // Coerce null/undefined to empty string
-    if (chat.length && !lastMessage.extra.reasoning) {
-        lastMessage.extra.reasoning = '';
+    if (chat.length && ['swipe', 'append', 'continue', 'appendFinal'].includes(type)) {
+        lastMessage.extra ??= {};
+        lastMessage.extra.reasoning ||= '';
     }
 
     if (!reasoning) {
@@ -8204,11 +8397,14 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         }
 
         await processImageAttachment(newMessage, { imageUrls });
+        assertPresentation();
+        markBrowserChatCompletionMessage(newMessage, browserJobId);
         const chat_id = chat.length;
         const emitMessageEvents = !fromStreaming && shouldEmitCharacterMessageEvents(newMessage, hasToolCalls);
         await withChatSurfaceStructureMutation(async () => {
             chat.push(newMessage);
             emitMessageEvents && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
+            assertPresentation();
             addOneMessage(chat[chat_id], { transient: fromStreaming });
         });
         if (!fromStreaming) await finalizeMessageContent(chat_id, emitMessageEvents ? event_types.CHARACTER_MESSAGE_RENDERED : null, type);
@@ -8875,6 +9071,8 @@ export async function runChatSave({ save, recover, title }) {
         }
         if (await confirmChatIntegrityOverwrite()) {
             await recover();
+        } else {
+            throw new Error('Chat write was not committed: integrity overwrite was declined');
         }
     }
 }
@@ -13228,6 +13426,7 @@ jQuery(async function () {
     $(document).on('click', '.last_mes .swipe_left', async (e, data) => await swipe(e, SWIPE_DIRECTION.LEFT, data));
 
     initCharacterSearch();
+    eventSource.on(event_types.CHAT_CHANGED, scheduleBrowserGenerationRecovery);
 
     $('#mes_impersonate').on('click', function () {
         $('#option_impersonate').trigger('click');
@@ -14455,7 +14654,7 @@ jQuery(async function () {
 
     $(window).on('beforeunload', () => {
         cancelTtsPlay();
-        if (streamingProcessor) {
+        if (streamingProcessor && !streamingProcessor.browserJobId) {
             console.log('Page reloaded. Aborting streaming...');
             streamingProcessor.onStopStreaming();
         }

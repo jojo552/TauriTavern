@@ -5,10 +5,11 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::{RwLock, watch};
+use tokio_util::sync::CancellationToken;
 
 use crate::dto::chat_completion_dto::{
     ChatCompletionGenerateRequestDto, ChatCompletionStatusRequestDto,
-    ChatCompletionStreamReadResultDto,
+    ChatCompletionStreamReadResultDto, ChatCompletionStreamStatusDto,
 };
 use crate::errors::ApplicationError;
 use crate::services::hashing::hex_lower;
@@ -44,7 +45,7 @@ use self::exchange::{
     ChatCompletionExchange, ChatCompletionProviderFormat, NormalizedChatCompletionResponse,
 };
 use self::generation_background::GenerationBackgroundLease;
-use self::stream_session::{StreamAppendOutcome, StreamSessionRegistry};
+use self::stream_session::{StreamAppendOutcome, StreamRetention, StreamSessionRegistry};
 
 const OPENAI_SOURCE: &str = ChatCompletionSource::OpenAi.key();
 pub(crate) const OPENCODE_STABLE_CHAT_ID_FIELD: &str = "_tauritavern_stable_chat_id";
@@ -602,8 +603,39 @@ impl ChatCompletionService {
         stream_id: String,
         dto: ChatCompletionGenerateRequestDto,
     ) -> Result<(), ApplicationError> {
+        self.start_stream_with_retention(
+            stream_id,
+            dto,
+            StreamRetention::Acknowledged,
+            CancellationToken::new(),
+        )
+        .await
+    }
+
+    /// Browser jobs retain their complete wire history until their host explicitly releases them.
+    /// The host token also covers cancellation before the shared session has been registered.
+    pub async fn start_replayable_stream(
+        self: &Arc<Self>,
+        stream_id: String,
+        dto: ChatCompletionGenerateRequestDto,
+        host_cancel: CancellationToken,
+    ) -> Result<(), ApplicationError> {
+        self.start_stream_with_retention(stream_id, dto, StreamRetention::Replayable, host_cancel)
+            .await
+    }
+
+    async fn start_stream_with_retention(
+        self: &Arc<Self>,
+        stream_id: String,
+        dto: ChatCompletionGenerateRequestDto,
+        retention: StreamRetention,
+        host_cancel: CancellationToken,
+    ) -> Result<(), ApplicationError> {
         let notify_completion = !Self::is_quiet_request(&dto);
-        let cancel = self.stream_sessions.register(&stream_id).await?;
+        let cancel = self
+            .stream_sessions
+            .register(&stream_id, retention, &host_cancel)
+            .await?;
         let background = GenerationBackgroundLease::start(
             self.generation_background_runtime.as_ref(),
             &stream_id,
@@ -612,7 +644,14 @@ impl ChatCompletionService {
         let service = self.clone();
         tokio::spawn(async move {
             service
-                .run_stream(stream_id, dto, cancel, background, notify_completion)
+                .run_stream(
+                    stream_id,
+                    dto,
+                    cancel,
+                    host_cancel,
+                    background,
+                    notify_completion,
+                )
                 .await;
         });
         Ok(())
@@ -624,6 +663,13 @@ impl ChatCompletionService {
         after_seq: u64,
     ) -> Result<ChatCompletionStreamReadResultDto, ApplicationError> {
         self.stream_sessions.read(stream_id, after_seq).await
+    }
+
+    pub async fn stream_status(
+        &self,
+        stream_id: &str,
+    ) -> Result<ChatCompletionStreamStatusDto, ApplicationError> {
+        self.stream_sessions.status(stream_id).await
     }
 
     pub async fn close_stream(&self, stream_id: &str) -> bool {
@@ -647,24 +693,47 @@ impl ChatCompletionService {
         stream_id: String,
         dto: ChatCompletionGenerateRequestDto,
         mut lifecycle_cancel: watch::Receiver<bool>,
+        host_cancel: CancellationToken,
         mut background: GenerationBackgroundLease,
         notify_completion: bool,
     ) {
+        // Close can win before this worker is first polled. Do not spawn a provider in that case.
+        let already_cancelled = *lifecycle_cancel.borrow() || host_cancel.is_cancelled();
+        if already_cancelled {
+            self.stream_sessions.close(&stream_id).await;
+            return;
+        }
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<String>();
         let (stop_provider, provider_cancel) = watch::channel(false);
         let generation_task = tokio::spawn({
             let service = self.clone();
-            async move { service.generate_stream(dto, sender, provider_cancel).await }
+            let host_cancel = host_cancel.clone();
+            async move {
+                tokio::select! {
+                    biased;
+                    _ = host_cancel.cancelled() => {
+                        Err(DomainError::generation_cancelled_by_user().into())
+                    }
+                    result = service.generate_stream(dto, sender, provider_cancel) => result,
+                }
+            }
         });
         let mut received_bytes = 0_u64;
 
         let result = loop {
             let chunk = tokio::select! {
-                chunk = receiver.recv() => chunk,
+                biased;
+                _ = host_cancel.cancelled() => {
+                    generation_task.abort();
+                    // The host may have closed before registration; remove that late session too.
+                    self.stream_sessions.close(&stream_id).await;
+                    break Err(DomainError::generation_cancelled_by_user().into());
+                }
                 _ = lifecycle_cancel.changed() => {
                     generation_task.abort();
                     break Err(DomainError::generation_cancelled_by_user().into());
                 }
+                chunk = receiver.recv() => chunk,
             };
             let Some(chunk) = chunk else {
                 break match generation_task.await {

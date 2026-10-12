@@ -5,6 +5,11 @@ import { createWebTransport } from './web/transport.js';
 import { isWebHost } from './scripts/util/host-identity.js';
 
 export { isWebHost };
+export { WebConnectionError, isWebConnectionError, WebSessionResetError, isWebSessionResetError } from './web/transport.js';
+
+// Explicit web-only recovery for safe read consumers. invoke itself remains single-attempt.
+export function waitUntilWebConnected(options) { return getWebTransport().waitUntilConnected(options); }
+export function recoverWebConnection() { return getWebTransport().recoverConnection(); }
 
 export function isProjectHost() { return isWebHost() || detectTauriEnv(); }
 
@@ -20,10 +25,6 @@ function getWebTransport() {
                 globalThis.toastr?.warning?.('服务器会话已重建；未加载的聊天滑动记录和打开的文件需重新打开。当前页面内容不会自动覆盖。', '服务器会话重置', { timeOut: 8000 });
             }
         },
-    });
-    window.addEventListener('pagehide', event => {
-        // A BFCache page may return with its readers intact; don't treat it as closed.
-        if (!event.persisted) void webTransport.dispose().catch(error => console.warn('Failed to close browser page session', error));
     });
     return webTransport;
 }

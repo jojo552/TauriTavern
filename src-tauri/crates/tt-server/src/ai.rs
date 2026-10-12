@@ -23,7 +23,7 @@ pub struct AiSession {
     generations: Mutex<HashMap<String, String>>,
 }
 
-fn client_id(args: &Value, name: &str) -> Result<String, CommandError> {
+pub(crate) fn client_id(args: &Value, name: &str) -> Result<String, CommandError> {
     let id = args
         .get(name)
         .and_then(Value::as_str)
@@ -40,7 +40,7 @@ fn client_id(args: &Value, name: &str) -> Result<String, CommandError> {
     Ok(id.to_string())
 }
 
-fn arg<T: serde::de::DeserializeOwned>(args: &Value, name: &str) -> Result<T, CommandError> {
+pub(crate) fn arg<T: serde::de::DeserializeOwned>(args: &Value, name: &str) -> Result<T, CommandError> {
     serde_json::from_value(args.get(name).cloned().unwrap_or(Value::Null))
         .map_err(|error| CommandError::BadRequest(format!("Invalid argument {name}: {error}")))
 }

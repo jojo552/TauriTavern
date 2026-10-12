@@ -42,11 +42,22 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 - `channel` 帧带从 0 开始、严格递增的 `sequence`；序号分配、入队和结束共用 Channel 的串行边界，支持并发任务共享 sink。`channel-end` 结束该 Channel；前端拒绝未知或乱序帧。
 - Channel 生命周期由后端持有它的任务/注册项决定，不在每次发起它的 invoke 返回时一律删除；实时消费者也不能因独立 HTTP 请求成功就丢弃稍后到达的帧。订阅主动取消或 Channel 结束才停止交付，同 session 短暂断线保留 channels、listeners 与资源。
 - 数据帧还有页面级 SSE `id`；ready/reset 控制帧无 id，不能推进数据 cursor。PageBus 保存最多 4096 帧、总序列化 JSON 16 MiB 的滚动回放窗口，淘汰最旧帧不是永久毒化在线页面。cursor 落在窗口外、在线消费者落后或超大单帧时明确 reset；字节上限不是上游 Value 构造的瞬时内存上限。
-- SSE 断线后，transport 关闭旧 EventSource，以 1 秒到最多 10 秒退避显式重开同页 SSE，从最后已派发 `id` 继续，不重新执行已经派发的异步回调。只有这一条前端恢复路径；旧 source 的迟到回调被 identity/epoch fence 拒绝。重连状态向用户可见。
+- SSE 断线后，transport 关闭旧 EventSource，以 1 秒到最多 10 秒退避显式重开同页 SSE，从最后已派发 `id` 继续，不重新执行已经派发的异步回调。visibility 恢复、online、BFCache pageshow 与真实 HTTP 网络失联共用这一恢复路径，不无条件拆除健康连接；单个定时器负责退避或 90 秒静默检查，旧 source/epoch/定时器回调都有 fence。服务端约每 20 秒发无 id 的 `{type:'heartbeat',sessionId}`，不入 PageBus、不推进数据 cursor；浏览器挂起时不能保证按墙钟准时检测。初始化和新 session GET 的明确网络失败也沿此退避等待，认证、有效 CommandError 和协议错误仍终止并传播。重连状态向用户可见。
 - SSE 本身断开不强制中止仍可得到成功响应的 HTTP 保存。实际 HTTP 中断只报告结果未知，绝不自动重放 invoke；一次性 commit 的 offset 与最终确认规则保持不变。
 - 合法 owner 的 session 消失（服务器重启/过期）或回放 gap，服务器返回无 id `{type:'session-reset', reason:'expired'|'gap'}`，结束旧页。前端创建新 session/CSRF，失败的旧请求不重放；后续独立请求可继续。错误 origin/cookie 仍拒绝，不能伪装为 reset。
 
-页面到期或确定不能恢复时，清理 AI、extension tools、reader 与未完成 commit，已发布数据不撤销。两个宿主共用 `tt-adapter-extension::tools::AgentExtensionTools` 的页面工具 registry / receipt runtime；浏览器 `PageChannel` 与原生 WebView Channel 各自实现 `ExtensionToolEventSink`，宿主只提供 transport 与触发页面清理，`tt-runtime` 只装配注入的 `ExtensionTools` port。同一工具 ID 可由多个打开的页面各自注册（同一页面重复注册仍报冲突），调用交给最近注册的存活页面，页面关闭后由次新的页面接替；Agent run 不属于某个页面，因此不按发起页路由。新 session 使旧文件资源失效：浏览器 numeric handles 单调分配并映射 server ids，旧句柄不能读/关新页同号资源；迟到旧响应也不得登记到新页。冷滑动 projection 不改存储内容，引用按 epoch 校验，缺失滑动记录必须重新打开聊天，不能删 marker 后按完整 payload 保存。Agent 工具仅重建已经确认的声明式注册/启用状态，旧 pending callback 取消；不自动恢复旧 generation、live subscription 或 commit。
+页面到期或确定不能恢复时，清理页面所属的临时 AI 请求、extension tools、reader 与未完成 commit，已发布数据不撤销；可恢复的浏览器 completion job 仅撤销旧页附着，不取消模型任务（见下节）。两个宿主共用 `tt-adapter-extension::tools::AgentExtensionTools` 的页面工具 registry / receipt runtime；浏览器 `PageChannel` 与原生 WebView Channel 各自实现 `ExtensionToolEventSink`，宿主只提供 transport 与触发页面清理，`tt-runtime` 只装配注入的 `ExtensionTools` port。同一工具 ID 可由多个打开的页面各自注册（同一页面重复注册仍报冲突），调用交给最近注册的存活页面，页面关闭后由次新的页面接替；Agent run 不属于某个页面，因此不按发起页路由。新 session 使旧文件资源失效：浏览器 numeric handles 单调分配并映射 server ids，旧句柄不能读/关新页同号资源；迟到旧响应也不得登记到新页。冷滑动 projection 不改存储内容，引用按 epoch 校验，缺失滑动记录必须重新打开聊天，不能删 marker 后按完整 payload 保存。Agent 工具仅重建已经确认的声明式注册/启用状态，旧 pending callback 取消；不自动恢复旧 generation、live subscription 或 commit。
+
+### 3.1 普通生成的恢复边界
+
+页面 SSE 的恢复与模型任务恢复不是同一概念。[BrowserAiJobs](../../src-tauri/crates/tt-server/src/ai_jobs.rs) 只拥有 Cookie 归属、页面附着和保留期；模型执行复用共享 ChatCompletionService，不复制生成或聊天保存业务。持久聊天的 Chat Completion `normal`/`regenerate` 请求先确认 provider-barrier 基线，预分配 jobId 后启动一次；流/非流任务均独立于 HTTP 和页面 lifetime。start 响应丢失仅查询同 ID，绝不重发模型请求。临时聊天、quiet、JSON-schema 等仍沿原管线；临时流可短断网同 cursor 读取，但不承诺关闭页后恢复。原生 stream 默认 ACK 淘汰规则不变。
+
+- 宿主最多保留 16 个未确认 job，创建起固定 2 小时到期，由后台每分钟回收并取消尚在运行的任务。流保留完整序列化回放，最多 16 MiB/8192 帧，超限显式失败，不滚动丢失历史；非流结果最多 16 MiB，presentation/error 最多 32 KiB。这些是保留数据预算，不是进程瞬时总内存保证。
+- 每个任务同一时刻仅附着一个页面，重复同页 attach 幂等；page bus 关闭立即撤销旧 reader lease，迟到 read/ACK 不得命中新附着。页面重建可声明 attach 后同 cursor 继续安全查询，命令和写请求本身不自动重放。
+- 重新打开聊天时，以目标、原始全消息内容摘要和追加位置核对基线，再把旧响应送入同一 provider decoder 与 StreamingProcessor 完成/保存管线，不重入 Generate 的命令、删消息、提示词构建或模型 start。原 speaker/provider/model/reasoning/signature 保留。聊天被修改或已有无法证明来源的已保存 partial 时停止自动恢复，保留结果并提示；提示可经用户确认取消旧 job，不猜测覆盖。内容摘要不是跨页面并发写入的存储 CAS。
+- 恢复不重发历史 STREAM_TOKEN_RECEIVED，不自动执行工具、auto-swipe 或 auto-continue。正常首次生成原行为保留；工具轮已保存的 transcript 确认后才释放上一 job。恢复遇工具结果保留任务并要求用户处理，不把断链恢复当成副作用续跑。
+- 最终消息携带 `extra.tauritavern.browserGeneration={jobId,completed:true}`，沿既有 final events → chat save → job ACK 完成。再次从盘加载到完成标记只确认释放，不重复应用回复或事件。事件到保存之间崩溃仍可能使扩展完成事件重复，不能声称跨崩溃 exactly-once；聊天保存失败/拒绝覆盖不得 ACK。任务不会独立自动写聊天，关闭页后的结果等重开、核对并保存后才发布。
+- 浏览器仅持久记录 jobId/chatRef 发现索引，不记录提示词、聊天全文或凭据。服务器进程重启销毁内存任务，旧索引让失效可见；不自动重新生成。Agent run/checkpoint/live UI 的生命周期与此独立，不能由普通生成恢复推出 Agent 自动续跑。
 
 ## 4. 文件传输与隔离边界
 

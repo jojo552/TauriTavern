@@ -52,6 +52,12 @@
 
 ---
 
+### 2.3 浏览器连接与普通生成恢复（Project）
+
+浏览器 transport 的明确网络失败共用退避恢复，认证/协议/业务失败不静默降级。`waitUntilWebConnected({signal})` 仅等待匹配的新 ready，取消只撤销等待者；`recoverWebConnection()` 仅唤醒唯一连接路径，均不重放 invoke。网络错误和页面 session 重置使用不同结构化错误；保存、模型 start、工具和未知副作用不自动重试。完整协议和边界见 [BrowserHost §3](CurrentState/BrowserHost.md#3-http-bytes-sse-与-channel)。
+
+可恢复普通生成以原响应进入共同解析/完成管线，重新打开不会重入 Generate 的前置命令或提示词链。恢复不重发历史 token 事件、不自动调用工具/续写/auto-swipe；首次未保存的回复保留既有终态消息事件与保存顺序，已从盘读到 job 完成标记的回复不重复应用。未承诺扩展事件跨崩溃 exactly-once，也不改变 Agent/native 生命周期或新增公开插件 ABI。
+
 ## 3. 全局 API（Public）
 
 `SillyTavern.getContext().macros` 提供宏注册与独立求值，接口和使用范围见[宏求值 API](API/Macros.md)。

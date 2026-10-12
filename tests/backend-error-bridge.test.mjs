@@ -137,9 +137,15 @@ test('backend error bridge fails fast when ready command fails', async () => {
 });
 
 function webHarness() {
-    const streams = [], timers = [], declarations = [], errors = [];
+    const streams = [], timers = new Map(), declarations = [], errors = [];
     let sessions = 0, nextSource = Promise.withResolvers(), nextDeclaration, nextError, declarationFailure;
-    let listenCount = 0;
+    let listenCount = 0, clock = 0, nextTimer = 0;
+    function runNextTimer() {
+        const [id, timer] = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
+        timers.delete(id);
+        clock = Math.max(clock, timer.at);
+        timer.callback();
+    }
     class Events {
         constructor(url) {
             this.url = url;
@@ -151,8 +157,9 @@ function webHarness() {
     }
     const transport = createWebTransport({
         EventSource: Events,
-        schedule: callback => { timers.push(callback); return timers.length; },
-        unschedule: () => {},
+        window: new EventTarget(), document: new EventTarget(), now: () => clock,
+        schedule: (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, at: clock + delay }); return id; },
+        unschedule: id => timers.delete(id),
         onError: error => { errors.push(error); nextError?.resolve(error); },
         fetch: async (url, init) => {
             if (url === '/__tt/session') {
@@ -172,7 +179,7 @@ function webHarness() {
         },
     });
     return {
-        transport, streams, timers, declarations, errors,
+        transport, streams, runNextTimer, declarations, errors,
         deps: {
             invoke: async command => {
                 const result = await transport.invoke(command);
@@ -205,7 +212,7 @@ test('browser backend errors replay on a short disconnect and declare readiness 
         first.frame({ type: 'event', event: 'tauritavern-backend-error', id: 1, payload: { message: 'first' } }, '0');
 
         first.onerror();
-        h.timers.shift()();
+        h.runNextTimer();
         const resumed = h.streams.at(-1);
         assert.match(resumed.url, /sessionId=page-1&after=0/);
         resumed.frame({ type: 'ready', sessionId: 'page-1' });

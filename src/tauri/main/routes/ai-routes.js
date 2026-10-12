@@ -6,7 +6,8 @@ import { createGenerationLifecycleService } from '../services/ai/generation-life
 import { createGenerationStatusBridge } from '../services/ai/generation-status-bridge.js';
 import { consumeChatCompletionStream } from '../services/ai/chat-completion-stream-consumer.js';
 import { createBrowserNotificationInvoke, createSystemNotificationService } from '../services/notifications/system-notification-service.js';
-import { isWebHost } from '../../../tauri-bridge.js';
+import { isWebHost, invoke, isWebConnectionError, isWebSessionResetError, recoverWebConnection, waitUntilWebConnected } from '../../../tauri-bridge.js';
+import { readBrowserChatCompletion, waitBrowserChatCompletionResult, queryBrowserChatCompletion, cancelBrowserChatCompletion, BrowserGenerationDetachedError } from '../../../web/chat-completion-jobs.js';
 import {
     asUpstreamFailureDetails,
     buildLegacyErrorPayload,
@@ -393,9 +394,36 @@ async function invokeChatCompletionWithAbort(context, payload, signal) {
     }
 }
 
-async function createChatCompletionStreamResponse(context, payload, signal, lifecycle) {
+async function startBrowserJob(payload, presentation, signal) {
+    const jobId = presentation.jobId;
+    try {
+        await invoke('start_chat_completion_job', { jobId, dto: payload, presentation }, { signal });
+    } catch (error) {
+        if (!isWebConnectionError(error) && !isWebSessionResetError(error)) throw error;
+        if (isWebConnectionError(error)) recoverWebConnection();
+        await waitUntilWebConnected({ signal });
+        // Confirmation was lost. Query the preassigned ID, never repeat the model start.
+        await queryBrowserChatCompletion('attach_chat_completion_job', { jobId }, signal);
+    }
+    return jobId;
+}
+
+async function invokeBrowserJobWithAbort(payload, presentation, signal) {
     await attachOpenCodeStableChatId(payload);
-    const streamId = createStreamId();
+    const cancel = () => { void cancelBrowserChatCompletion(presentation.jobId).catch(console.warn); };
+    signal?.addEventListener('abort', cancel, { once: true });
+    try {
+        await startBrowserJob(payload, presentation, signal);
+        return await waitBrowserChatCompletionResult(presentation.jobId, signal);
+    } finally {
+        signal?.removeEventListener('abort', cancel);
+    }
+}
+
+async function createChatCompletionStreamResponse(context, payload, signal, lifecycle, presentation = null, attached = false) {
+    if (!attached) await attachOpenCodeStableChatId(payload);
+    const streamId = presentation?.jobId ?? createStreamId();
+    const stopped = new AbortController();
     const encoder = new TextEncoder();
 
     let isClosed = false;
@@ -409,7 +437,8 @@ async function createChatCompletionStreamResponse(context, payload, signal, life
 
     const closeSession = async () => {
         try {
-            await context.safeInvoke('close_chat_completion_stream', { streamId });
+            if (presentation) await cancelBrowserChatCompletion(streamId);
+            else await context.safeInvoke('close_chat_completion_stream', { streamId });
         } catch (error) {
             console.debug('Failed to close chat completion stream:', error);
         }
@@ -441,12 +470,14 @@ async function createChatCompletionStreamResponse(context, payload, signal, life
         appendDone = false,
         errorPayload = null,
         failureMessage = '',
+        discardFrames = false,
     } = {}) => {
         if (isClosed) {
             return;
         }
 
         isClosed = true;
+        stopped.abort();
 
         if (flushTimer !== null) {
             clearTimeout(flushTimer);
@@ -462,7 +493,8 @@ async function createChatCompletionStreamResponse(context, payload, signal, life
             pendingFrames.push('[DONE]');
         }
 
-        flushFrames();
+        if (discardFrames) pendingFrames.length = 0;
+        else flushFrames();
 
         if (controllerRef) {
             try {
@@ -482,9 +514,10 @@ async function createChatCompletionStreamResponse(context, payload, signal, life
                 cancelAfterStart = true;
             }
         }
-        if (cancelUpstream || streamStartSettled) {
+        if (cancelUpstream || (streamStartSettled && !presentation)) {
             await closeSession();
         }
+        // A recoverable job is released only after the chat checkpoint confirms its reply.
 
         const isSuccessfulCompletion = sawDone && !cancelUpstream && !errorPayload;
         const shouldNotifyFailure = !isSuccessfulCompletion && !cancelUpstream && Boolean(failureMessage || errorPayload);
@@ -552,6 +585,8 @@ async function createChatCompletionStreamResponse(context, payload, signal, life
                 streamId,
                 onEvent: onStreamEvent,
                 isClosed: () => isClosed,
+                signal: stopped.signal,
+                read: presentation ? (afterSeq) => readBrowserChatCompletion(streamId, afterSeq, stopped.signal) : undefined,
             });
             if (status === 'done') {
                 await closeStream({ appendDone: true });
@@ -578,7 +613,7 @@ async function createChatCompletionStreamResponse(context, payload, signal, life
 
             if (signal) {
                 abortHandler = () => {
-                    void closeStream({ cancelUpstream: true });
+                    void closeStream({ cancelUpstream: !attached && !(signal.reason instanceof BrowserGenerationDetachedError) });
                 };
 
                 if (signal.aborted) {
@@ -590,11 +625,14 @@ async function createChatCompletionStreamResponse(context, payload, signal, life
             }
 
             try {
-                await context.safeInvoke('start_chat_completion_stream', {
-                    streamId,
-                    dto: payload,
-                    locale: getSillyTavernLocale(),
-                });
+                if (!attached) {
+                    if (presentation) await startBrowserJob(payload, presentation, stopped.signal);
+                    else await context.safeInvoke('start_chat_completion_stream', {
+                        streamId,
+                        dto: payload,
+                        locale: getSillyTavernLocale(),
+                    });
+                }
 
                 // If abort happened while stream registration was in-flight, run cancellation again
                 // after start settles to avoid a missed pre-registration cancel race.
@@ -622,14 +660,31 @@ async function createChatCompletionStreamResponse(context, payload, signal, life
             }
         },
         async cancel() {
-            await closeStream({ cancelUpstream: true });
+            await closeStream({ cancelUpstream: !attached, discardFrames: true });
         },
     });
 
     return new Response(readable, {
         status: 200,
-        headers: STREAM_RESPONSE_HEADERS,
+        headers: { ...STREAM_RESPONSE_HEADERS, ...(presentation ? { 'x-tauritavern-job-id': streamId } : {}) },
     });
+}
+
+export async function createRecoveredChatCompletionResponse(job, signal) {
+    if (!isWebHost() || !job.presentation) throw new Error('Browser generation presentation is required');
+    if (!job.stream) {
+        return new Response(JSON.stringify(await waitBrowserChatCompletionResult(job.jobId, signal)), {
+            headers: { 'content-type': 'application/json', 'x-tauritavern-job-id': job.jobId },
+        });
+    }
+    const parser = job.presentation.parser;
+    const payload = {
+        chat_completion_source: parser.requestContext.chatCompletionSource,
+        model: parser.requestContext.model,
+        custom_api_format: parser.requestContext.customApiFormat,
+        opencode_api_format: parser.requestContext.opencodeApiFormat,
+    };
+    return createChatCompletionStreamResponse({ safeInvoke: invoke }, payload, signal, null, job.presentation, true);
 }
 
 export function registerAiRoutes(router, context, { jsonResponse }) {
@@ -685,6 +740,8 @@ export function registerAiRoutes(router, context, { jsonResponse }) {
 
     router.post('/api/backends/chat-completions/generate', async ({ body, init }) => {
         const payload = { ...asObject(body) };
+        const presentation = isWebHost() ? payload._tauritavern_recovery ?? null : null;
+        delete payload._tauritavern_recovery;
         const wantsStream = Boolean(payload.stream);
         const lifecycle = generationLifecycleService.createLifecycle({
             quiet: isQuietRequest(payload),
@@ -693,12 +750,16 @@ export function registerAiRoutes(router, context, { jsonResponse }) {
 
         try {
             if (wantsStream) {
-                return await createChatCompletionStreamResponse(context, payload, init?.signal, lifecycle);
+                return await createChatCompletionStreamResponse(context, payload, init?.signal, lifecycle, presentation);
             }
 
-            const completion = await invokeChatCompletionWithAbort(context, payload, init?.signal);
+            const completion = presentation
+                ? await invokeBrowserJobWithAbort(payload, presentation, init?.signal)
+                : await invokeChatCompletionWithAbort(context, payload, init?.signal);
             await lifecycle.finish({ success: true });
-            return jsonResponse(completion || {});
+            const response = jsonResponse(completion || {});
+            if (presentation) response.headers.set('x-tauritavern-job-id', presentation.jobId);
+            return response;
         } catch (error) {
             const errorMessage = getUserFacingErrorMessage(error);
             const aborted = isRequestCancelled(error);

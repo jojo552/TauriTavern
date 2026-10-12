@@ -1,5 +1,7 @@
 // @ts-check
 
+import { isWebHost, isWebConnectionError, recoverWebConnection, waitUntilWebConnected } from '../../../../tauri-bridge.js';
+
 /**
  * Consume one Rust-owned chat completion session in sequence.
  *
@@ -8,21 +10,28 @@
  *   streamId: string;
  *   onEvent: (event: unknown) => void;
  *   isClosed: () => boolean;
+ *   signal?: AbortSignal;
+ *   read?: (afterSeq: number) => Promise<any>;
  * }} deps
  * @returns {Promise<'done' | 'cancelled' | 'closed'>}
  */
-export async function consumeChatCompletionStream({ safeInvoke, streamId, onEvent, isClosed }) {
+export async function consumeChatCompletionStream({ safeInvoke, streamId, onEvent, isClosed, signal, read }) {
     let afterSeq = 0;
+    const readStream = read ?? (cursor => safeInvoke('read_chat_completion_stream', { streamId, afterSeq: cursor }));
 
     while (!isClosed()) {
         let result;
         try {
-            result = await safeInvoke('read_chat_completion_stream', { streamId, afterSeq });
-        } catch {
-            if (isClosed()) {
-                return 'closed';
+            result = await readStream(afterSeq);
+        } catch (error) {
+            if (isClosed()) return 'closed';
+            if (isWebHost()) {
+                if (!isWebConnectionError(error)) throw error;
+                recoverWebConnection();
+                await waitUntilWebConnected({ signal });
+                continue; // Only this read is repeated, with the same delivery cursor.
             }
-            result = await safeInvoke('read_chat_completion_stream', { streamId, afterSeq });
+            result = await readStream(afterSeq);
         }
         const events = Array.isArray(result?.events) ? result.events : [];
 

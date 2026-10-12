@@ -36,6 +36,7 @@ import { materializeInitialChatHistoryMessages } from './tauritavern/agent/agent
 import { agentMessageProjection, prepareAgentHistory } from './tauritavern/agent/agent-model-messages.js';
 import { projectToolTurns } from './tauritavern/tool-turn-projection.js';
 import { canReplayProviderMetadata, getChatCompletionRequestContext } from './tauritavern/provider-replay.js';
+import { prepareBrowserChatCompletion } from '../web/chat-completion-jobs.js';
 import { applyParamOmissions, getEffectiveGenerationSettings } from './tauri/generation-params/omission.js';
 
 import {
@@ -4696,6 +4697,11 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, al
     legacyMcpToolRound?.finalizeAdvertisedTools(generate_data);
     const requestContext = getChatCompletionRequestContext(generate_data);
     const isClaudeMessagesRequest = usesClaudeMessagesSemantics(generate_data, requestContext.model);
+    const parserOptions = { type, stream, canMultiSwipe, requestContext, isClaudeMessagesRequest, jsonSchema, showThoughts: oai_settings.show_thoughts };
+    const presentation = await prepareBrowserChatCompletion(type, parserOptions);
+    if (presentation !== null) {
+        generate_data._tauritavern_recovery = presentation;
+    }
 
     const generate_url = '/api/backends/chat-completions/generate';
     const response = await fetch(generate_url, {
@@ -4705,6 +4711,31 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, al
         signal: signal,
     });
 
+    const data = await parseChatCompletionResponse(response, parserOptions);
+    if (!stream && type !== 'quiet') {
+        const logprobs = parseChatCompletionLogprobs(data, requestContext);
+        // The normal caller updates the active message after this request returns.
+        // Recovery saves through its identity-guarded completion path instead.
+        delay(1).then(() => saveLogprobsForActiveMessage(logprobs, null));
+    }
+    return data;
+}
+
+/**
+ * Decode both live and recovered responses using the original request's presentation context.
+ * Tool calls are parsed here, never executed.
+ * @param {Response} response Provider response
+ * @param {object} options Captured request and presentation settings
+ * @param {string} options.type Generation type
+ * @param {boolean} options.stream Whether the response is streaming
+ * @param {boolean} options.canMultiSwipe Whether additional choices are swipes
+ * @param {object} options.requestContext Captured provider/model context
+ * @param {boolean} options.isClaudeMessagesRequest Whether Claude Messages semantics apply
+ * @param {object?} options.jsonSchema Requested JSON schema
+ * @param {boolean} options.showThoughts Captured show-thoughts setting
+ * @returns {Promise<unknown>} Normalized response or streaming generator factory
+ */
+export async function parseChatCompletionResponse(response, { type, stream, canMultiSwipe, requestContext, isClaudeMessagesRequest, jsonSchema, showThoughts }) {
     if (!response.ok) {
         tryParseStreamingError(response, await response.text());
         throw new Error(`Got response status ${response.status}`);
@@ -4713,7 +4744,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, al
         const eventStream = getEventSourceStream();
         response.body.pipeThrough(eventStream);
         const reader = eventStream.readable.getReader();
-        return async function* streamData() {
+        const streamData = async function* () {
             let text = '';
             const swipes = [];
             const toolCalls = [];
@@ -4752,7 +4783,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, al
                     // FIXME: state.reasoning should be an array to support multi-swipe
                     swipes[swipeIndex] = (swipes[swipeIndex] || '') + getStreamingReply(parsed, state, { ...requestContext, overrideShowThoughts: false });
                 } else {
-                    text += getStreamingReply(parsed, state, requestContext);
+                    text += getStreamingReply(parsed, state, { ...requestContext, overrideShowThoughts: showThoughts });
                 }
 
                 ToolManager.parseToolCalls(toolCalls, parsed, state.toolSignatures);
@@ -4769,13 +4800,16 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, al
                     toastr.error(stopStatus.message, t`Claude response truncated`);
                 }
 
-                yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };
+                yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed, requestContext), toolCalls: toolCalls, state: state };
             }
         };
+        Object.defineProperty(streamData, 'browserJobId', { value: response.headers.get('x-tauritavern-job-id') });
+        return streamData;
     }
     else {
         const data = await response.json();
         data.requestContext = requestContext;
+        Object.defineProperty(data, 'browserJobId', { value: response.headers.get('x-tauritavern-job-id') });
 
         checkQuotaError(data);
         checkModerationError(data);
@@ -4811,13 +4845,6 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, al
             }
         } else if (stopStatus?.code === 'model.output_truncated') {
             toastr.error(stopStatus.message, t`Claude response truncated`);
-        }
-
-        if (type !== 'quiet') {
-            const logprobs = parseChatCompletionLogprobs(data);
-            // Delay is required to allow the active message to be updated to
-            // the one we are generating (happens right after sendOpenAIRequest)
-            delay(1).then(() => saveLogprobsForActiveMessage(logprobs, null));
         }
 
         return data;
@@ -4933,14 +4960,17 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, mo
  * parseChatCompletionLogprobs converts the response data returned from a chat
  * completions-like source into an array of TokenLogprobs found in the response.
  * @param {Object} data - response data from a chat completions-like source
+ * @param {object} [context] Captured request context
+ * @param {string} [context.chatCompletionSource] Chat completion source
+ * @param {string} [context.model] Chat completion model
  * @returns {import('./logprobs.js').TokenLogprobs[] | null} converted logprobs
  */
-function parseChatCompletionLogprobs(data) {
+export function parseChatCompletionLogprobs(data, { chatCompletionSource, model } = getChatCompletionRequestContext(oai_settings, getChatCompletionModel())) {
     if (!data) {
         return null;
     }
 
-    switch (oai_settings.chat_completion_source) {
+    switch (chatCompletionSource) {
         case chat_completion_sources.AIMLAPI:
             return Object.keys(data?.choices?.[0]?.logprobs ?? {}).includes('content')
                 ? parseOpenAIChatLogprobs(data.choices[0]?.logprobs)
@@ -4957,7 +4987,7 @@ function parseChatCompletionLogprobs(data) {
             }
             // OpenAI Text Completion API is treated as a chat completion source
             // by SillyTavern, hence its presence in this function.
-            return textCompletionModels.includes(getChatCompletionModel())
+            return textCompletionModels.includes(model)
                 ? parseOpenAITextLogprobs(data.choices[0]?.logprobs)
                 : parseOpenAIChatLogprobs(data.choices[0]?.logprobs);
         default:

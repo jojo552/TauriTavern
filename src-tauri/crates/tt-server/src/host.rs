@@ -13,7 +13,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
-use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -49,6 +49,7 @@ use tt_ports::extension_tools::ExtensionToolEventSink;
 use tt_runtime::CoreServices;
 
 use crate::ai::AiSession;
+use crate::ai_jobs::BrowserAiJobs;
 use crate::error::CommandError;
 use crate::events::{PageBus, PageChannel, PageStream, ResumeError};
 use crate::files::HostFiles;
@@ -65,6 +66,7 @@ const INDEX_CACHE_CONTROL: &str = "no-store";
 
 pub struct Host {
     pub services: Arc<CoreServices>,
+    pub ai_jobs: BrowserAiJobs,
     pub security: Arc<Security>,
     pub ios_policy: IosPolicyActivationReport,
     pub templates: Arc<BundledTemplateService>,
@@ -264,6 +266,7 @@ pub async fn close_session(host: &Host, session: Arc<Session>) {
     host.security.remove_session(&session.id);
     host.backend_errors.remove_page(&session.id);
     session.page.bus.close();
+    host.ai_jobs.detach_page(&session.id);
     host.extension_tools.clear_page(&session.id);
     session.page.ai.close_all(&host.services).await;
     if let Err(error) = session.page.resources.close_all(&host.services).await {
@@ -276,6 +279,7 @@ fn terminate_page(host: Arc<Host>, session: Arc<Session>) {
     host.security.remove_session(&session.id);
     host.backend_errors.remove_page(&session.id);
     session.page.bus.close();
+    host.ai_jobs.detach_page(&session.id);
     host.extension_tools.clear_page(&session.id);
     tokio::spawn(async move { close_session(&host, session).await });
 }
@@ -314,9 +318,7 @@ async fn events(
     };
     let ready = Event::default()
         .data(json!({ "type": "ready", "sessionId": guard.session().id }).to_string());
-    Ok(Sse::new(page_stream(host, ready, stream, guard))
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(20)))
-        .into_response())
+    Ok(Sse::new(page_stream(host, ready, stream, guard)).into_response())
 }
 
 fn page_stream(
@@ -326,21 +328,36 @@ fn page_stream(
     guard: StreamGuard,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let session = guard.session().clone();
-    let frames = futures_util::stream::unfold(Some(stream), move |stream| {
+    let period = Duration::from_secs(20);
+    let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let frames = futures_util::stream::unfold(Some((stream, heartbeat)), move |state| {
         let host = host.clone();
         let session = session.clone();
         async move {
-            let mut stream = stream?;
-            match stream.next().await {
-                Ok(Some((id, frame))) => Some((
-                    Ok(Event::default().id(id.to_string()).data(frame)),
-                    Some(stream),
+            let (mut stream, mut heartbeat) = state?;
+            tokio::select! {
+                // PageStream::next is cancellation-safe: it advances only when returning a frame.
+                // Prefer terminal/page data over heartbeat if both are ready.
+                biased;
+                frame = stream.next() => match frame {
+                    Ok(Some((id, frame))) => Some((
+                        Ok(Event::default().id(id.to_string()).data(frame)),
+                        Some((stream, heartbeat)),
+                    )),
+                    Err(ResumeError::Gap) => {
+                        terminate_page(host, session);
+                        Some((Ok(session_reset(ResetReason::Gap)), None))
+                    }
+                    Ok(None) | Err(ResumeError::Closed) => None,
+                },
+                _ = heartbeat.tick() => Some((
+                    // Observable control traffic, never retained by PageBus or assigned an id.
+                    Ok(Event::default().data(json!({
+                        "type": "heartbeat", "sessionId": session.id,
+                    }).to_string())),
+                    Some((stream, heartbeat)),
                 )),
-                Err(ResumeError::Gap) => {
-                    terminate_page(host, session);
-                    Some((Ok(session_reset(ResetReason::Gap)), None))
-                }
-                Ok(None) | Err(ResumeError::Closed) => None,
             }
         }
     });
@@ -449,6 +466,13 @@ async fn dispatch(
     args: Value,
 ) -> Result<ResourceReply, CommandError> {
     let services = &host.services;
+    if let Some(value) = host
+        .ai_jobs
+        .dispatch(services, session, command, &args)
+        .await?
+    {
+        return Ok(ResourceReply::Json(value));
+    }
     if let Some(reply) = session
         .page
         .resources
@@ -457,7 +481,12 @@ async fn dispatch(
     {
         return Ok(reply);
     }
-    if let Some(value) = session.page.ai.dispatch(services, command, &args).await? {
+    if let Some(value) = session
+        .page
+        .ai
+        .dispatch(services, command, &args)
+        .await?
+    {
         return Ok(ResourceReply::Json(value));
     }
     if let Some(value) = page_command(host, session, command, &args).await? {
