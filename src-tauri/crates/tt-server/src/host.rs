@@ -481,12 +481,7 @@ async fn dispatch(
     {
         return Ok(reply);
     }
-    if let Some(value) = session
-        .page
-        .ai
-        .dispatch(services, command, &args)
-        .await?
-    {
+    if let Some(value) = session.page.ai.dispatch(services, command, &args).await? {
         return Ok(ResourceReply::Json(value));
     }
     if let Some(value) = page_command(host, session, command, &args).await? {

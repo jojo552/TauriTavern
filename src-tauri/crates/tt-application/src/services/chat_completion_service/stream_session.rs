@@ -300,7 +300,8 @@ impl StreamSession {
             notified.as_mut().enable();
             let mut state = self.state.lock().await;
 
-            if self.retention == StreamRetention::Acknowledged && after_seq < state.acknowledged_seq {
+            if self.retention == StreamRetention::Acknowledged && after_seq < state.acknowledged_seq
+            {
                 return Err(ApplicationError::Conflict(format!(
                     "Chat completion stream cursor {after_seq} is behind acknowledged sequence {}",
                     state.acknowledged_seq
@@ -400,7 +401,10 @@ mod tests {
     #[tokio::test]
     async fn unacknowledged_stream_events_are_replayed_in_sequence() {
         let (session, _) = StreamSession::new(StreamRetention::Acknowledged);
-        let wakes = [Arc::new(WakeCount::default()), Arc::new(WakeCount::default())];
+        let wakes = [
+            Arc::new(WakeCount::default()),
+            Arc::new(WakeCount::default()),
+        ];
         let wakers = wakes.clone().map(Waker::from);
         let mut first_wait = Box::pin(session.read(0));
         let mut retry_wait = Box::pin(session.read(0));
@@ -505,9 +509,12 @@ mod tests {
             seq: 1,
             data: String::new(),
         };
-        let data_bytes = MAX_REPLAY_BYTES - TERMINAL_RESERVE_BYTES - 2 - session.event_bytes(&empty);
+        let data_bytes =
+            MAX_REPLAY_BYTES - TERMINAL_RESERVE_BYTES - 2 - session.event_bytes(&empty);
         session.append("x".repeat(data_bytes)).await.unwrap();
-        session.fail("\\".repeat(TERMINAL_RESERVE_BYTES), None).await;
+        session
+            .fail("\\".repeat(TERMINAL_RESERVE_BYTES), None)
+            .await;
         let read = session.read(0).await.unwrap();
         assert!(matches!(
             read.events.last(),
@@ -576,11 +583,8 @@ mod tests {
         let registry = StreamSessionRegistry::default();
         let host_cancel = CancellationToken::new();
         let lock = registry.active.write().await;
-        let mut registering = Box::pin(registry.register(
-            "late-start",
-            StreamRetention::Replayable,
-            &host_cancel,
-        ));
+        let mut registering =
+            Box::pin(registry.register("late-start", StreamRetention::Replayable, &host_cancel));
         assert!(
             registering
                 .as_mut()

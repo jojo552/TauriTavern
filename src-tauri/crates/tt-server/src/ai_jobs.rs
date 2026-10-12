@@ -311,8 +311,13 @@ impl BrowserAiJobs {
                         .resolve_generate_user_endpoint(&dto)?,
                 )
                 .await?;
-                let job =
-                    self.register(session, client.clone(), stream, presentation, Instant::now())?;
+                let job = self.register(
+                    session,
+                    client.clone(),
+                    stream,
+                    presentation,
+                    Instant::now(),
+                )?;
                 let reply = job.descriptor(&client)?;
                 let service = services.chat_completion_service.clone();
                 // HTTP response loss cannot drop the generation future. Only explicit host cleanup
@@ -323,11 +328,7 @@ impl BrowserAiJobs {
                     }
                     if stream {
                         match service
-                            .start_replayable_stream(
-                                job.server_id.clone(),
-                                dto,
-                                job.cancel.clone(),
-                            )
+                            .start_replayable_stream(job.server_id.clone(), dto, job.cancel.clone())
                             .await
                         {
                             Ok(()) => {
@@ -368,12 +369,9 @@ impl BrowserAiJobs {
                         browser == &session.browser
                             && !entry.expired_at(now)
                             && entry.job.presentation.is_some()
-                            && entry
-                                .attached
-                                .as_ref()
-                                .is_none_or(|attached| {
-                                    attached.detached.is_cancelled() || attached.page == session.id
-                                })
+                            && entry.attached.as_ref().is_none_or(|attached| {
+                                attached.detached.is_cancelled() || attached.page == session.id
+                            })
                     })
                     .map(|((_, client), entry)| entry.job.descriptor(client))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -728,7 +726,11 @@ mod tests {
         let now = Instant::now();
         for index in 0..MAX_JOBS {
             jobs.register(
-                if index % 2 == 0 { &first } else { &other_browser },
+                if index % 2 == 0 {
+                    &first
+                } else {
+                    &other_browser
+                },
                 index.to_string(),
                 false,
                 None,
