@@ -33,6 +33,44 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 当前 session 注册上限为 64；创建后 120 秒仍未建立 SSE 的 session 由到期清理处理。建立过 SSE 的页面在最后一条流结束后有 10 分钟恢复期，短暂切后台或网络变更不立即销毁资源；超过期限不能通过迟到重连复活。流认领与到期回收共享 Security 的原子生命周期入口。真正离开页面（非 BFCache 的 pagehide）发出带 CSRF 的 keepalive `POST /__tt/session/close`，立即释放该页的工具和资源；临时切后台没有 pagehide，不进入此清理。Cookie、页面 session 与资源句柄是不同生命周期，不应混为一个全局 session。
 
+### 2.1 配置用户名、密码与启动参数
+
+登录凭据由部署者在启动 `tt-server` 时配置，不在聊天设置或登录页中创建/修改；聊天显示名和模型 API Key 都不是这里的登录凭据。当前只支持一个宿主账号，没有注册、用户数据库或网页改密码入口。
+
+| 参数 | 配置方法 |
+| --- | --- |
+| `--username` | 登录页输入的用户名，默认 `tt`；不能为空、不能包含 `:`。 |
+| `--password-file` | **必填**，指向私有 UTF-8 密码文件；文件内容就是登录密码，不是路径本身。密码至少 20 字节，建议随机生成；只忽略文件末尾的 CR/LF 换行，不忽略空格。 |
+| `--public-origin` | **必填**，浏览器访问的精确 HTTP(S) origin，例如 `https://tt.example.org`；非标准端口也须写入，不能含路径、查询或凭据。公网访问使用 HTTPS。反向代理保留这个 Host，否则登录请求会被拒绝。 |
+
+Unix 上密码文件不能对 group/other 开放，建议权限 `0600`，并由服务运行账号拥有。不要放在 `web-root`、`resource-root`、用户可下载目录或 Git 仓库中；不将密码放在命令行、URL、前端代码或公开日志里。
+
+首次部署可以在服务运行账号的私有目录生成密码（示例需要 OpenSSL）。`noclobber` 会在文件已经存在时失败，避免重复部署误改现有密码：
+
+```bash
+AUTH_DIR="${HOME:?}/.config/tauritavern-web"
+install -d -m 700 "$AUTH_DIR"
+(umask 077; set -o noclobber; openssl rand -hex 32 > "$AUTH_DIR/password")
+```
+
+生成后通过私密方式查看/保管密码，并在登录页填写其内容；不要把真实值写进文档、Issue 或聊天记录。也可以用可信编辑器设置自己的高熵密码，但仍须满足长度和权限要求。
+
+在解压后的发布目录中启动（路径与域名按实际部署调整，认证与用户数据必须放在发布目录之外）：
+
+```bash
+./tt-server \
+  --listen 127.0.0.1:8002 \
+  --web-root ./web \
+  --resource-root ./resources \
+  --data-root "${HOME:?}/.local/share/tauritavern-web/data" \
+  --app-root "${HOME:?}/.local/share/tauritavern-web/app" \
+  --public-origin https://tt.example.org \
+  --username tt \
+  --password-file "${HOME:?}/.config/tauritavern-web/password"
+```
+
+用户名/密码只在服务启动时读取。修改用户名需要更新启动参数，修改密码需要更新同一个私有文件，然后重启服务；已有登录随之失效。**先等生成结束并确认聊天保存完成再重启**，因为内存中的可恢复生成任务也会丢失，不会自动重新请求模型。运维登录探针配置的用户名也须与服务一致；已有部署更新程序文件时不要覆盖密码或重建用户数据。
+
 ## 3. HTTP bytes、SSE 与 Channel
 
 普通成功响应保留 JSON 值，`204` 转为 `null`；`application/octet-stream` 响应转为 `Uint8Array`。JSON 错误保留 Rust `CommandError` 及结构化详情，不转换成伪成功值。
