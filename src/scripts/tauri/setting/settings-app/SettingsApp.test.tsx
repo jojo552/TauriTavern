@@ -287,6 +287,7 @@ test('iOS proxy repair path: an enabled proxy can be disabled but not re-enabled
         lanSyncAllowed: false,
         supportsCloseToTrayOnClose: false,
         supportsDataRootSelection: false,
+        supportsSignOut: false,
     };
     options.viewModel.values = createValues({
         requestProxy: { enabled: true, url: 'http://127.0.0.1:7890', bypass: ['localhost'] },
