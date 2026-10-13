@@ -183,6 +183,7 @@ src/
 - TanStack symbols 由 `lib.js` vendor facade 在 composition root 注入单一 adapter；原生 ESM 源码不直接解析 bare package。virtualizer 的 `scrollToFn` 也注入既有 ChatScrollAdapter，因此 `#chat` 的物理滚动写入仍只有一个 owner。
 - bounded 的 runtime candidate 由独立 grant lease 管理；viewport 滚动可以 revoke/re-grant，而不会伪造 content commit 或消息业务事件。
 - runtime demand 只按 visible 与 overscan 排序；常驻 true tail 不额外预留 runtime 名额。真实全局 reflow 会保持独立 follow-tail 意图，或以稳定消息 key + clamp 后的楼内 offset 恢复锚点；普通 settings save 与 IME height-only resize 不再清空全部历史测量。
+- composer 使用 CSS `field-sizing` 时，聊天尺寸回调以 `clientHeight` 读取真实滚动视口，只对视口缩小保留既有下边缘补偿；扩张由浏览器自然 clamp，读历史时保持顶部位置。清空草稿和追加消息可在同帧发生，不能只按视口增高量再向上补偿，否则会在既有发送滚底帧之前短暂露出旧楼层。welcome 不参与消息视口补偿，非 CSS autofit 的同步旧底距路径保持不变。
 - 可由 `chat[mesid]` 推导的楼层状态由 materializer 负责；bounded DOM commit 后，私有 `syncMountedChatViewState()` 在最终测量前幂等重放 swipe/delete 等临时核心 UI。该 seam 不发送 SillyTavern 业务事件。
 - 旧扩展直接删除消息 root 时，兼容桥只负责释放相应 root 的 lease；它不会接管第三方的内容写入或重编号。bounded policy 必须先通过 participant capability gate。
 - Project raw API 见 `docs/API/ChatSurface.md`。

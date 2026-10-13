@@ -876,7 +876,7 @@ export function initRossMods() {
     const cssAutofit = CSS.supports('field-sizing', 'content');
 
     if (cssAutofit) {
-        let lastHeight = chatBlock.offsetHeight;
+        let lastHeight = chatBlock.clientHeight;
         const chatBlockResizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
                 if (entry.target !== chatBlock) {
@@ -884,13 +884,17 @@ export function initRossMods() {
                 }
 
                 const threshold = 1;
-                const newHeight = chatBlock.offsetHeight;
+                const newHeight = chatBlock.clientHeight;
                 const deltaHeight = newHeight - lastHeight;
                 const isScrollAtBottom = Math.abs(chatBlock.scrollHeight - chatBlock.scrollTop - newHeight) <= threshold;
 
-                // A shrinking welcome viewport must not push the reader down the page.
+                // Compensate only shrinking message viewports. On expansion the browser
+                // already clamps the scroll range; subtracting height again can expose
+                // older messages if an append arrived before this resize notification.
+                // History readers keep their top position, and sends own the tail scroll.
+                // The welcome screen keeps its reading position on either resize.
                 if (chatBlock.querySelector(':scope > .welcomePanel') === null
-                    && !isScrollAtBottom && Math.abs(deltaHeight) > threshold) {
+                    && !isScrollAtBottom && deltaHeight < -threshold) {
                     offsetChatScrollTop(-deltaHeight);
                 }
                 lastHeight = newHeight;
