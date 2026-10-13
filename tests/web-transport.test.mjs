@@ -506,6 +506,38 @@ test('explicit page exit closes its session with CSRF instead of leaving registr
     await assert.rejects(h.transport.invoke('save_settings'), /page closed/);
 });
 
+test('sign-out stops the page quietly only after the server confirms, and a failed sign-out keeps it usable', async () => {
+    const h = harness();
+    const stream = await h.ready();
+    h.reply(() => Response.json({ error: 'Cross-site requests are not allowed' }, { status: 403 }));
+    await assert.rejects(h.transport.signOut(), /HTTP 403/);
+    assert.equal(stream.closed, undefined, 'an unconfirmed sign-out leaves the page connected');
+    h.reply(() => Response.json(true));
+    assert.equal(await h.transport.invoke('is_ready'), true);
+
+    const pending = Promise.withResolvers();
+    // An in-flight command is rejected by the sign-out rather than left hanging.
+    h.reply(init => (JSON.parse(init.body ?? '{}').command === 'generate' ? pending.promise : new Response(null, { status: 204 })));
+    const generating = assert.rejects(h.transport.invoke('generate'), /Signed out/);
+    await h.transport.signOut();
+    await generating;
+    const signOut = h.calls.find(call => call.url === '/__tt/auth/logout');
+    assert.equal(signOut.method, 'POST');
+    assert.equal(signOut.body, '{}');
+    assert.equal(stream.closed, true);
+    assert.equal(h.timers.size, 0);
+    const before = h.calls.length;
+    // The server already closed this browser's pages: page exit and wake signals stay silent.
+    await h.transport.dispose();
+    stream.onerror();
+    h.emit(h.window, 'online');
+    h.emit(h.document, 'visibilitychange');
+    assert.equal(h.calls.length, before, 'no page close, status check or reconnect after sign-out');
+    assert.equal(h.streams.length, 1);
+    assert.deepEqual(h.errors, [], 'signing out is not reported as a failure');
+    await assert.rejects(h.transport.invoke('save_settings'), /Signed out/);
+});
+
 test('dispose cancels in-flight session creation and fences its late response while rejecting readiness waiters', async () => {
     const h = harness();
     const release = Promise.withResolvers();

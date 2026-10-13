@@ -106,7 +106,6 @@ pub struct PageState {
 pub fn router(host: Arc<Host>) -> Router {
     Router::new()
         .route("/login", get(login_page))
-        .route("/logout", get(logout_page))
         .route("/__tt/auth/status", get(auth_status))
         .route(
             "/__tt/auth/login",
@@ -160,7 +159,7 @@ fn invoke_decompression() -> RequestDecompressionLayer {
 fn public_auth_route(method: &Method, path: &str) -> bool {
     matches!(
         (method, path),
-        (&Method::GET, "/login" | "/logout" | "/__tt/auth/status")
+        (&Method::GET, "/login" | "/__tt/auth/status")
             | (&Method::POST, "/__tt/auth/login" | "/__tt/auth/logout")
     )
 }
@@ -279,10 +278,9 @@ static LOGIN_LOGO: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     )
 });
 
-fn auth_page(mode: &str) -> Response {
+fn login_document() -> Response {
     let nonce = random_token();
     let html = include_str!("login.html")
-        .replace("__MODE__", mode)
         .replace("__NONCE__", &nonce)
         .replace("__LOGO__", &LOGIN_LOGO);
     let mut response = (
@@ -304,16 +302,12 @@ fn auth_page(mode: &str) -> Response {
 }
 
 /// A signed-in browser has nothing to do on the login page: it goes straight to the application
-/// and its loading screen. Signing out stays on the explicit `/logout` confirmation.
+/// and its loading screen. Signing out is an action inside the application.
 async fn login_page(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
     if host.security.authenticate(&headers).is_ok() {
         return see_other("/");
     }
-    auth_page("login")
-}
-
-async fn logout_page() -> Response {
-    auth_page("logout")
+    login_document()
 }
 
 async fn auth_status(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
@@ -1191,10 +1185,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_and_logout_documents_use_fresh_shared_nonce_policies_without_cookies() {
+    async fn login_documents_use_fresh_nonce_policies_and_embed_the_logo_without_cookies() {
         let mut nonces = Vec::new();
-        for mode in ["login", "logout"] {
-            let response = auth_page(mode);
+        for _ in 0..2 {
+            let response = login_document();
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
             assert!(!response.headers().contains_key(header::SET_COOKIE));
@@ -1216,7 +1210,6 @@ mod tests {
             assert_eq!(html.matches(&format!("nonce=\"{nonce}\"")).count(), 2);
             assert!(policy.contains(&format!("script-src 'nonce-{nonce}'")));
             assert!(policy.contains(&format!("style-src 'nonce-{nonce}'")));
-            assert!(html.contains(&format!("data-mode=\"{mode}\"")));
             assert!(html.contains("src=\"data:image/png;base64,"));
             assert!(!html.contains("__LOGO__"));
             nonces.push(nonce.to_owned());

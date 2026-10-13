@@ -4046,6 +4046,7 @@
     "Choose which TauriTavern tools appear in the wand menu beside the message box.": "选择显示在消息输入框旁魔杖菜单中的 TauriTavern 工具。",
     "Sync Panel": "同步面板",
     "Reload Frontend": "刷新前端",
+    "Sign out of this browser? All open pages of this browser will need to sign in again.": "确定登出此浏览器？此浏览器打开的所有页面都需要重新登录。",
     "Frontend Logs": "前端日志",
     "Backend Logs": "后端日志",
     "LLM API Logs": "LLM API 日志",

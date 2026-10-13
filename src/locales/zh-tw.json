@@ -4560,6 +4560,7 @@
     "Quick Access Menu": "快捷入口選單",
     "Choose which TauriTavern tools appear in the wand menu beside the message box.": "選擇顯示在訊息輸入框旁魔杖選單中的 TauriTavern 工具。",
     "Sync Panel": "同步面板",
+    "Sign out of this browser? All open pages of this browser will need to sign in again.": "確定登出此瀏覽器？此瀏覽器開啟的所有頁面都需要重新登入。",
     "Reload Frontend": "刷新前端",
     "Frontend Logs": "前端日誌",
     "Backend Logs": "後端日誌",

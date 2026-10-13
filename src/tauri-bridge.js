@@ -10,6 +10,8 @@ export { WebConnectionError, isWebConnectionError, WebSessionResetError, isWebSe
 // Explicit web-only recovery for safe read consumers. invoke itself remains single-attempt.
 export function waitUntilWebConnected(options) { return getWebTransport().waitUntilConnected(options); }
 export function recoverWebConnection() { return getWebTransport().recoverConnection(); }
+// Browser host only: revokes this browser's login. The caller leaves the page afterwards.
+export function signOutWebHost() { return getWebTransport().signOut(); }
 
 export function isProjectHost() { return isWebHost() || detectTauriEnv(); }
 

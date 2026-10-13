@@ -135,13 +135,15 @@ export function createWebTransport({
         }
     }
 
-    async function dispose() {
-        if (failure) return;
+    // Ends this page's transport locally without reporting a failure. Used by page exit and by an
+    // explicit sign-out; both are intended endings, not errors to recover from or surface.
+    function shutdown(reason) {
+        if (failure) return false;
         source?.close();
         source = undefined;
         clearConnectionTimer();
         removeLifecycleHooks();
-        failure = new Error('Browser page closed');
+        failure = reason;
         sessionRequest?.abort(failure);
         sessionRequest = undefined;
         channels.clear();
@@ -150,13 +152,31 @@ export function createWebTransport({
         rejectConnectedWaiters(failure);
         rejectRequests(failure);
         stopped.reject(failure);
-        if (!session) return;
+        return true;
+    }
+
+    async function dispose() {
+        if (!shutdown(new Error('Browser page closed')) || !session) return;
         const response = await fetch('/__tt/session/close', {
             method: 'POST', credentials: 'same-origin', keepalive: true,
             headers: { 'content-type': 'application/json', 'x-tt-csrf': session.csrfToken },
             body: JSON.stringify({ sessionId: session.sessionId }),
         });
         if (!response.ok) throw new Error(`Could not close browser page session: HTTP ${response.status}`);
+    }
+
+    // The server revokes the login and closes every page of this browser, including this one, so
+    // the local stop neither reconnects, reports lost authentication, nor posts a page close.
+    async function signOut() {
+        if (failure) throw failure;
+        const response = await fetch('/__tt/auth/logout', {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'content-type': 'application/json' }, body: '{}',
+        }).catch(cause => {
+            throw new WebConnectionError('Sign out: connection lost; the result is unknown', { cause });
+        });
+        if (response.status !== 204) throw new Error(`Sign out failed (HTTP ${response.status})`);
+        shutdown(new Error('Signed out'));
     }
 
     function fail(error) {
@@ -470,7 +490,7 @@ export function createWebTransport({
     }
 
     return {
-        start, invoke, listen, createChannel, dispose, waitUntilConnected, recoverConnection,
+        start, invoke, listen, createChannel, dispose, signOut, waitUntilConnected, recoverConnection,
         close: () => fail(new Error('Web transport closed')),
         async csrfToken() { await start(); return session.csrfToken; },
         sessionEpoch: () => epoch,

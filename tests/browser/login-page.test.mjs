@@ -9,13 +9,13 @@ const json = (status, data) => ({ status, ok: status >= 200 && status < 300, jso
 // Drain resolved fetch/body promises, without waiting on an intentionally gated request.
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-function openPage(context, { mode = 'login', authenticated = false, status, login, logout } = {}) {
+function openPage(context, { authenticated = false, status, login } = {}) {
     const window = new Window({
-        url: `http://localhost/${mode}?next=https://outside.invalid/`,
+        url: 'http://localhost/login?next=https://outside.invalid/',
         settings: { disableJavaScriptEvaluation: true, disableCSSFileLoading: true, disableJavaScriptFileLoading: true },
     });
     context.after(() => window.happyDOM.close());
-    window.document.write(template.replaceAll('__MODE__', mode).replaceAll('__NONCE__', 'test-nonce').replaceAll('__LOGO__', 'data:,'));
+    window.document.write(template.replaceAll('__NONCE__', 'test-nonce').replaceAll('__LOGO__', 'data:,'));
     const calls = [];
     const navigations = [];
     const fetch = async (url, options = {}) => {
@@ -25,9 +25,6 @@ function openPage(context, { mode = 'login', authenticated = false, status, logi
             case '/__tt/auth/login':
                 assert.ok(login, 'Unexpected login');
                 return login();
-            case '/__tt/auth/logout':
-                assert.ok(logout, 'Unexpected logout');
-                return logout();
             default: throw new Error(`Unexpected request: ${url}`);
         }
     };
@@ -101,43 +98,13 @@ test('a browser already signed in continues to the application instead of a logi
     const page = openPage(context, { authenticated: true });
     await settle();
     assert.deepEqual(page.navigations, ['/']);
-    // Only the status read happens: no page session or logout is created by the login page.
+    // Only the status read happens: the login page never creates an application page session.
     assert.deepEqual(page.calls.map(call => call.url), ['/__tt/auth/status']);
     assert.equal(page.calls[0].options.credentials, 'same-origin');
     assert.equal(page.element('login-form').hidden, true);
-    assert.equal(page.element('authenticated-actions').hidden, true);
 });
 
-test('logout page only sends logout on active confirmation and then offers the login entry', async context => {
-    const pending = Promise.withResolvers();
-    const page = openPage(context, { mode: 'logout', authenticated: true, logout: () => pending.promise });
-    await settle();
-    assert.deepEqual(page.calls.map(call => call.url), ['/__tt/auth/status']);
-    assert.equal(page.element('authenticated-actions').hidden, false);
-    page.element('logout-button').click();
-    page.element('logout-button').click();
-    const posts = page.calls.filter(call => call.url === '/__tt/auth/logout');
-    assert.equal(posts.length, 1);
-    assert.equal(posts[0].options.method, 'POST');
-    assert.equal(posts[0].options.credentials, 'same-origin');
-    assert.equal(posts[0].options.headers['Content-Type'], 'application/json');
-    assert.deepEqual(JSON.parse(posts[0].options.body), {});
-    pending.resolve(json(204, null));
-    await settle();
-    assert.equal(page.element('authenticated-actions').hidden, true);
-    assert.equal(page.element('login-form').hidden, true);
-    assert.equal(page.element('login-link').hidden, false);
-    assert.equal(page.element('login-link').getAttribute('href'), '/login');
-    assert.deepEqual(page.navigations, []);
-});
-
-test('unauthenticated logout only offers login; uncertain initial status blocks credential submission until checked', async context => {
-    const logoutPage = openPage(context, { mode: 'logout' });
-    await settle();
-    assert.equal(logoutPage.element('login-link').hidden, false);
-    assert.equal(logoutPage.element('authenticated-actions').hidden, true);
-    assert.deepEqual(logoutPage.calls.map(call => call.url), ['/__tt/auth/status']);
-
+test('uncertain initial status blocks credential submission until checked', async context => {
     let online = false;
     const loginPage = openPage(context, { status: () => {
         if (!online) throw new TypeError('Offline');

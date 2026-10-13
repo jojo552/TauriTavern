@@ -20,6 +20,8 @@ export function resolveTauriTavernSettingsCapabilities() {
         lanSyncAllowed: !webHost && iosCaps?.sync?.lan !== false,
         supportsCloseToTrayOnClose: hostPlatform() === 'windows',
         supportsDataRootSelection,
+        // Only the browser host has a login; native hosts have nothing to sign out of.
+        supportsSignOut: webHost,
     };
 }
 

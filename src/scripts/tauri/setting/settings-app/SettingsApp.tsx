@@ -383,6 +383,14 @@ function SettingsApp({
                     </div>
                 </SettingsSection>
             )}
+
+            {capabilities.supportsSignOut && (
+                <SettingsSection title={tr('Account')} icon="fa-user">
+                    <div className="tt-settings-action-grid">
+                        <ActionButton label={tr('Logout')} icon="fa-right-from-bracket" onClick={() => void actions.signOut()} />
+                    </div>
+                </SettingsSection>
+            )}
         </div>
     );
 }

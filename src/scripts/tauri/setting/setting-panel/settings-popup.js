@@ -3,8 +3,10 @@ import { translate } from '../../../i18n.js';
 import {
     openDialog,
     setDataRoot,
+    signOutWebHost,
     updateTauriTavernSettings,
 } from '../../../../tauri-bridge.js';
+import { flushLifecycleState } from '../../../../tauri/main/services/lifecycle/lifecycle-flush-service.js';
 import { runTaskOrPopup, showErrorPopup } from './popup-utils.js';
 import {
     loadChatBackupStorageStats,
@@ -382,6 +384,22 @@ async function chooseDataRoot() {
     return normalized;
 }
 
+async function signOut() {
+    const confirmation = await callGenericPopup(translate('Sign out of this browser? All open pages of this browser will need to sign in again.'), POPUP_TYPE.CONFIRM, '', {
+        okButton: translate('Logout'),
+        cancelButton: translate('Cancel'),
+        wide: false,
+        large: false,
+    });
+    if (confirmation !== POPUP_RESULT.AFFIRMATIVE) {
+        return;
+    }
+    // Pending saves must land while still signed in; a failed save stops the sign-out.
+    await flushLifecycleState('sign-out');
+    await signOutWebHost();
+    window.location.replace('/login');
+}
+
 function createSettingsActions(backgroundOptions) {
     return {
         chooseDataRoot: () => runTaskOrPopup(chooseDataRoot),
@@ -410,6 +428,7 @@ function createSettingsActions(backgroundOptions) {
             const { openSyncPopup } = await import('./sync-popup.js');
             await openSyncPopup();
         }),
+        signOut: () => runTaskOrPopup(signOut),
     };
 }
 

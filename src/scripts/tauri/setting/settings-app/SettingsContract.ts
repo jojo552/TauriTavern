@@ -16,6 +16,7 @@ export type SettingsCapabilities = {
     lanSyncAllowed: boolean;
     supportsCloseToTrayOnClose: boolean;
     supportsDataRootSelection: boolean;
+    supportsSignOut: boolean;
 };
 
 export type ChatBackupStorageStats = {
@@ -201,6 +202,7 @@ export type SettingsActions = {
     openBackendLogs: () => Promise<unknown>;
     openLlmApiLogs: () => Promise<unknown>;
     openSync: () => Promise<unknown>;
+    signOut: () => Promise<unknown>;
 };
 
 export type SettingsMountOptions = {
@@ -230,6 +232,7 @@ const REQUIRED_ACTIONS = [
     'openBackendLogs',
     'openLlmApiLogs',
     'openSync',
+    'signOut',
 ] as const;
 
 /** Validates the parts of the JS host boundary that TypeScript cannot see. */
@@ -248,6 +251,7 @@ export function validateSettingsBoundary(
         'lanSyncAllowed',
         'supportsCloseToTrayOnClose',
         'supportsDataRootSelection',
+        'supportsSignOut',
     ]) {
         if (!plainObject(capabilities) || typeof capabilities[name] !== 'boolean') {
             throw new Error(`TauriTavern settings capability is unavailable: ${name}`);

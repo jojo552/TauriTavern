@@ -87,6 +87,7 @@ function createActions(overrides: Partial<SettingsActions> = {}): SettingsAction
         openBackendLogs: () => Promise.resolve(),
         openLlmApiLogs: () => Promise.resolve(),
         openSync: () => Promise.resolve(),
+        signOut: () => Promise.resolve(),
         ...overrides,
     };
 }
@@ -99,6 +100,7 @@ function createOptions(overrides: Partial<SettingsMountOptions> = {}): SettingsM
                 lanSyncAllowed: true,
                 supportsCloseToTrayOnClose: true,
                 supportsDataRootSelection: true,
+                supportsSignOut: false,
             },
             values: createValues(),
             dataRoot: {
@@ -181,6 +183,8 @@ test('projected capabilities remove unavailable browser tools without reducing n
             lanSyncAllowed: native,
             supportsCloseToTrayOnClose: native,
             supportsDataRootSelection: native,
+            // Only the browser host has a login to sign out of.
+            supportsSignOut: !native,
         };
         const { container, handle } = mountApp(options);
         const view = within(container);
@@ -191,6 +195,7 @@ test('projected capabilities remove unavailable browser tools without reducing n
             expect(view.getByRole('button', { name })).toBeTruthy();
         }
         expect(view.getByRole('button', { name: 'Manage Quick Access' })).toBeTruthy();
+        expect(Boolean(view.queryByRole('button', { name: 'Logout' }))).toBe(!native);
         close(handle);
     }
 });

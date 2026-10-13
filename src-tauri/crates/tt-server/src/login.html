@@ -199,7 +199,7 @@
         }
     </style>
 </head>
-<body data-mode="__MODE__">
+<body>
     <div class="aurora aurora--teal" aria-hidden="true"></div>
     <div class="aurora aurora--gold" aria-hidden="true"></div>
     <main aria-labelledby="heading">
@@ -209,7 +209,7 @@
         </div>
         <div class="panel">
             <h1 id="heading">登录</h1>
-            <p id="description" class="description">使用已配置的用户名和密码进入应用。</p>
+            <p class="description">使用已配置的用户名和密码进入应用。</p>
             <form id="login-form" action="/__tt/auth/login" method="post" hidden>
                 <fieldset id="login-fields" disabled>
                     <div class="field">
@@ -229,11 +229,6 @@
                     <button id="login-button" class="primary" type="submit">登录</button>
                 </fieldset>
             </form>
-            <section id="authenticated-actions" aria-label="退出登录操作" hidden>
-                <button id="logout-button" class="primary" type="button" disabled>确认退出登录</button>
-                <a class="secondary" href="/">返回应用</a>
-            </section>
-            <a id="login-link" class="primary" href="/login" hidden>前往登录</a>
             <p id="message" class="message" role="status" aria-live="polite" aria-atomic="true">正在检查登录状态…</p>
             <button id="retry-status" class="secondary" type="button" hidden>重新检查状态</button>
             <noscript><p>此页面需要 JavaScript 才能检查登录状态并安全提交。请启用后重新加载。</p></noscript>
@@ -243,55 +238,28 @@
         (() => {
             'use strict';
 
-            const mode = document.body.dataset.mode;
-            const heading = document.getElementById('heading');
-            const description = document.getElementById('description');
             const form = document.getElementById('login-form');
             const fields = document.getElementById('login-fields');
             const username = document.getElementById('username');
             const password = document.getElementById('password');
             const showPassword = document.getElementById('show-password');
             const loginButton = document.getElementById('login-button');
-            const actions = document.getElementById('authenticated-actions');
-            const logoutButton = document.getElementById('logout-button');
-            const loginLink = document.getElementById('login-link');
             const message = document.getElementById('message');
             const retryStatus = document.getElementById('retry-status');
             let busy = false;
-            let authenticated = null;
+            let signedOut = false;
 
             function showMessage(text, isError = false) {
                 message.textContent = text;
                 message.dataset.error = String(isError);
             }
 
-            function revealPassword(visible) {
-                password.type = visible ? 'text' : 'password';
-                showPassword.setAttribute('aria-pressed', String(visible));
-                showPassword.setAttribute('aria-label', visible ? '隐藏密码' : '显示密码');
-            }
-
             function setBusy(value) {
                 busy = value;
                 fields.disabled = value;
-                logoutButton.disabled = value;
                 retryStatus.disabled = value;
                 form.setAttribute('aria-busy', String(value));
-                actions.setAttribute('aria-busy', String(value));
                 loginButton.textContent = value ? '正在登录…' : '登录';
-                logoutButton.textContent = value ? '正在退出…' : '确认退出登录';
-            }
-
-            function renderState(value) {
-                authenticated = value;
-                form.hidden = value || mode === 'logout';
-                actions.hidden = !value;
-                loginLink.hidden = value || mode === 'login';
-                retryStatus.hidden = true;
-                heading.textContent = mode === 'logout' ? '退出登录' : '登录';
-                description.textContent = value
-                    ? '确认退出当前浏览器的登录？关联的应用页面连接也将结束。'
-                    : mode === 'logout' ? '当前浏览器尚未登录。' : '使用已配置的用户名和密码进入应用。';
             }
 
             async function readJson(response) {
@@ -303,6 +271,9 @@
                 return typeof data?.error === 'string' && data.error.trim() ? data.error : fallback;
             }
 
+            // Signing out happens inside the application; this page only signs in. The server
+            // already redirects signed-in browsers, and this covers a login completed in another
+            // tab after this page loaded.
             async function checkStatus() {
                 if (busy) return;
                 setBusy(true);
@@ -315,14 +286,14 @@
                         retryStatus.hidden = false;
                         return;
                     }
-                    // The server already redirects signed-in browsers; this covers a login that
-                    // completed in another tab after this page loaded.
-                    if (data.authenticated && mode === 'login') {
+                    if (data.authenticated) {
                         showMessage('已登录，正在进入应用…');
                         location.replace('/');
                         return;
                     }
-                    renderState(data.authenticated);
+                    signedOut = true;
+                    form.hidden = false;
+                    retryStatus.hidden = true;
                     showMessage('');
                 } catch {
                     showMessage('网络连接失败，无法检查登录状态。请检查网络后重试。', true);
@@ -333,12 +304,15 @@
             }
 
             showPassword.addEventListener('click', () => {
-                revealPassword(password.type === 'password');
+                const visible = password.type === 'password';
+                password.type = visible ? 'text' : 'password';
+                showPassword.setAttribute('aria-pressed', String(visible));
+                showPassword.setAttribute('aria-label', visible ? '隐藏密码' : '显示密码');
             });
 
             form.addEventListener('submit', async (event) => {
                 event.preventDefault();
-                if (busy || authenticated !== false || mode !== 'login' || !form.reportValidity()) return;
+                if (busy || !signedOut || !form.reportValidity()) return;
                 const credentials = { username: username.value, password: password.value };
                 setBusy(true);
                 showMessage('正在登录…');
@@ -365,39 +339,7 @@
                 }
             });
 
-            logoutButton.addEventListener('click', async () => {
-                if (busy || authenticated !== true) return;
-                setBusy(true);
-                showMessage('正在退出登录…');
-                try {
-                    const response = await fetch('/__tt/auth/logout', {
-                        method: 'POST', credentials: 'same-origin',
-                        headers: { 'Content-Type': 'application/json' }, body: '{}',
-                    });
-                    if (response.status !== 204) {
-                        showMessage(responseError(await readJson(response), '退出未成功，请稍后重试。'), true);
-                        return;
-                    }
-                    renderState(false);
-                    showMessage('已退出登录。');
-                } catch {
-                    showMessage('网络连接失败，退出结果未确认。请重新检查登录状态。', true);
-                    retryStatus.hidden = false;
-                } finally {
-                    setBusy(false);
-                }
-            });
-
             retryStatus.addEventListener('click', checkStatus);
-            if (mode !== 'login' && mode !== 'logout') {
-                showMessage('页面配置无效，请联系管理员。', true);
-                return;
-            }
-            if (mode === 'logout') {
-                heading.textContent = '退出登录';
-                description.textContent = '正在确认当前浏览器的登录状态。';
-                document.title = '退出登录 · TauriTavern';
-            }
             void checkStatus();
         })();
     </script>
