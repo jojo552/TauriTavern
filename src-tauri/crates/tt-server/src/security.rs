@@ -741,7 +741,10 @@ mod tests {
         assert_eq!(replacement.closed_pages.len(), 1);
         assert!(page.page.bus.closed().is_cancelled());
         assert!(page.authentication.revoked.is_cancelled());
-        assert_eq!(authentication(&security, &replacement).browser, first.browser);
+        assert_eq!(
+            authentication(&security, &replacement).browser,
+            first.browser
+        );
     }
 
     #[test]
