@@ -123,6 +123,9 @@ try {
     assert.equal(authenticated.headers.get('cache-control'), 'no-store');
     assert.deepEqual(await authenticated.json(), { authenticated: true });
     assert.equal(authenticated.headers.getSetCookie().length, 0, 'authentication status is not a page bootstrap');
+    const signedInLogin = await request('/login');
+    assert.equal(signedInLogin.status, 303, 'a signed-in browser skips the login page');
+    assert.equal(signedInLogin.headers.get('location'), '/');
     const index = await request('/');
     assert.equal(index.status, 200);
     assert.ok((await index.text()).includes("platform: 'browser', kind: 'web'"));

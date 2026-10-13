@@ -15,7 +15,7 @@ function openPage(context, { mode = 'login', authenticated = false, status, logi
         settings: { disableJavaScriptEvaluation: true, disableCSSFileLoading: true, disableJavaScriptFileLoading: true },
     });
     context.after(() => window.happyDOM.close());
-    window.document.write(template.replaceAll('__MODE__', mode).replaceAll('__NONCE__', 'test-nonce'));
+    window.document.write(template.replaceAll('__MODE__', mode).replaceAll('__NONCE__', 'test-nonce').replaceAll('__LOGO__', 'data:,'));
     const calls = [];
     const navigations = [];
     const fetch = async (url, options = {}) => {
@@ -49,9 +49,9 @@ test('real login template submits exact credentials once and only enters the roo
     const page = openPage(context, { login: () => pending.promise });
     await settle();
     page.fill();
-    page.element('show-password').checked = true;
-    page.element('show-password').dispatchEvent(new page.window.Event('change'));
+    page.element('show-password').click();
     assert.equal(page.element('password').type, 'text');
+    assert.equal(page.element('show-password').getAttribute('aria-pressed'), 'true');
     page.submit();
     page.submit();
     assert.equal(page.element('login-fields').disabled, true);
@@ -97,20 +97,15 @@ test('failed credentials, rate limits, malformed success and network failures ne
     }
 });
 
-test('authenticated login stays accessible and offers explicit logout without booting an application session', async context => {
-    const page = openPage(context, { authenticated: true, logout: () => json(204, null) });
+test('a browser already signed in continues to the application instead of a login screen', async context => {
+    const page = openPage(context, { authenticated: true });
     await settle();
-    assert.deepEqual(page.navigations, []);
+    assert.deepEqual(page.navigations, ['/']);
+    // Only the status read happens: no page session or logout is created by the login page.
     assert.deepEqual(page.calls.map(call => call.url), ['/__tt/auth/status']);
     assert.equal(page.calls[0].options.credentials, 'same-origin');
     assert.equal(page.element('login-form').hidden, true);
-    assert.equal(page.element('authenticated-actions').hidden, false);
-    assert.equal(page.element('authenticated-actions').querySelector('a').getAttribute('href'), '/');
-    page.element('logout-button').click();
-    await settle();
-    assert.equal(page.element('login-form').hidden, false);
     assert.equal(page.element('authenticated-actions').hidden, true);
-    assert.deepEqual(page.navigations, []);
 });
 
 test('logout page only sends logout on active confirmation and then offers the login entry', async context => {

@@ -19,7 +19,7 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 [host.rs](../../src-tauri/crates/tt-server/src/host.rs) 使用独立登录页与 Cookie 认证，不再接受 HTTP Basic，也不发浏览器原生登录挑战。CLI `username` / `password-file` 仍定义同一单用户凭据；这不是上游多用户账户系统。[security.rs](../../src-tauri/crates/tt-server/src/security.rs) 对公开及受保护入口共同校验精确 Host，不信任 forwarded host/origin。
 
-- 公开页面只有 `/login`、`/logout`，由独立 [login.html](../../src-tauri/crates/tt-server/src/login.html) 提供，无主应用依赖、外链资源或客户端秘密；响应 `no-store`，内联 script/style 用随机 nonce CSP，禁止被 frame 嵌入。访问 `/logout` 不产生退出副作用，需要主动确认。
+- 公开页面只有 `/login`、`/logout`，由独立 [login.html](../../src-tauri/crates/tt-server/src/login.html) 提供，视觉与启动加载页（[loader.css](../../src/css/loader.css)）一致；不依赖主应用或需认证的静态资源，品牌图标由宿主从同一 `img/logo.png` 内嵌为 data URI，无客户端秘密。响应 `no-store`，内联 script/style 用随机 nonce CSP（图片仅允许 `data:`），禁止被 frame 嵌入。已登录浏览器访问 `/login` 直接 303 进入 `/` 与加载页，不显示中间状态页。访问 `/logout` 不产生退出副作用，需要主动确认。
 - `GET /__tt/auth/status` 只返回 `{authenticated:boolean}`，不创建 page session。`POST /__tt/auth/login` 提交 JSON `{username,password}`，成功只返回 `{ok:true}` 并固定进入 `/`；没有外部 return URL。密码不写入 URL、storage 或日志。登录/退出 body 最多 8 KiB，必须精确同源 Origin；提供 Fetch Metadata 时还必须 `same-origin`。错误账号密码统一 401，无用户名枚举；失败限流为有界单用户窗口，不信任 forwarded IP。
 - 登录发放随机 `tt_auth`（固定 7 天）和身份 Cookie `tt_browser`（30 天），均 `HttpOnly; SameSite=Strict; Path=/`，HTTPS 加 `Secure`。最多 64 个登录，认证注册表在宿主内存中；服务器重启需要重新登录，不新增账户数据库。`tt_browser` 只用于浏览器归属，不能单独授权。
 - 未登录文档入口转至 `/login`；API、静态脚本、SSE 和下载返回 401 JSON 与 `x-tt-login-required: 1`，不返回伪登录 HTML，也不发 `WWW-Authenticate`。Origin/页面 CSRF/资源归属等命令授权拒绝继续使用原有错误契约，不能当作登录失效。

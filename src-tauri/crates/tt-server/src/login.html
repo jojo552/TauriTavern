@@ -5,112 +5,239 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="dark">
     <title>登录 · TauriTavern</title>
+    <!-- Visual language follows the boot splash (src/css/loader.css): same backdrop, aurora,
+         logo and teal-to-gold accent, so login and loading read as one entry experience. -->
     <style nonce="__NONCE__">
         :root {
+            --teal: #22b6c6;
+            --gold: #f5bb2b;
+            --accent: linear-gradient(90deg, var(--teal), #7fd3c4 45%, var(--gold));
+            --ease: cubic-bezier(0.22, 1, 0.36, 1);
+            --text: rgb(220 220 210);
+            --muted: rgb(220 220 210 / 0.68);
             color-scheme: dark;
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            background: #111318;
-            color: #edf0f5;
+            font: 15px/1.5 "Noto Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+            color: var(--text);
+            background: #101112;
         }
         * { box-sizing: border-box; }
         [hidden] { display: none !important; }
         body {
+            position: relative;
             margin: 0;
             min-height: 100vh;
             min-height: 100dvh;
-            display: grid;
-            place-items: center;
-            padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
-                max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: max(28px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+                max(28px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+            background: radial-gradient(ellipse 120% 90% at 50% 38%, #1d2123 0%, #151718 55%, #101112 100%);
+            overflow-x: hidden;
+        }
+        .aurora {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            width: min(90vmin, 600px);
+            aspect-ratio: 1;
+            margin: calc(min(90vmin, 600px) / -2) 0 0 calc(min(90vmin, 600px) / -2);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        .aurora--teal {
+            background: radial-gradient(circle, rgb(34 182 198 / 0.22) 0%, rgb(34 182 198 / 0.07) 40%, transparent 68%);
+            animation: drift-teal 11s ease-in-out infinite alternate;
+        }
+        .aurora--gold {
+            background: radial-gradient(circle, rgb(245 187 43 / 0.16) 0%, rgb(245 187 43 / 0.05) 40%, transparent 68%);
+            animation: drift-gold 13s ease-in-out infinite alternate;
         }
         main {
+            position: relative;
             width: 100%;
-            max-width: 420px;
-            padding: 32px;
-            border: 1px solid #333844;
-            border-radius: 20px;
-            background: #1b1e26;
-            box-shadow: 0 16px 48px #0004;
+            max-width: 380px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: clamp(16px, 4vh, 28px);
         }
-        .brand { margin: 0 0 24px; color: #c5b5f3; font-weight: 650; letter-spacing: .03em; }
-        h1 { margin: 0 0 10px; font-size: 1.65rem; }
-        .description, .footnote { color: #b3bac9; line-height: 1.65; }
-        .description { margin: 0 0 24px; }
-        .footnote { margin: 24px 0 0; font-size: .85rem; }
-        fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
-        .field { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; }
-        input:not([type="checkbox"]) {
+        .brand {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            animation: enter 800ms var(--ease) both;
+        }
+        .logo {
+            width: min(44vmin, 180px);
+            height: auto;
+            user-select: none;
+            -webkit-user-drag: none;
+            animation: float 4s ease-in-out 800ms infinite;
+        }
+        .logo-shadow {
+            width: min(26vmin, 104px);
+            height: 12px;
+            margin-top: calc(min(44vmin, 180px) * -0.16);
+            border-radius: 50%;
+            background: radial-gradient(closest-side, rgb(0 0 0 / 0.55), transparent);
+            animation: shadow 4s ease-in-out 800ms infinite;
+        }
+        .panel {
             width: 100%;
-            min-height: 46px;
-            border: 1px solid #4b5363;
-            border-radius: 10px;
-            padding: 10px 12px;
-            background: #111318;
-            color: inherit;
+            padding: 28px;
+            border: 1px solid rgb(255 255 255 / 0.08);
+            border-radius: 20px;
+            background: rgb(255 255 255 / 0.035);
+            box-shadow: 0 24px 60px rgb(0 0 0 / 0.35);
+            animation: rise 800ms var(--ease) 200ms both;
+        }
+        h1 { margin: 0 0 6px; font-size: 1.5rem; font-weight: 650; color: rgb(240 240 232); }
+        .description { margin: 0 0 22px; color: var(--muted); line-height: 1.65; }
+        fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+        .field { margin-bottom: 18px; }
+        label { display: block; margin-bottom: 8px; font-size: 0.9rem; color: var(--muted); letter-spacing: 0.02em; }
+        input {
+            width: 100%;
+            min-height: 48px;
+            border: 1px solid rgb(255 255 255 / 0.1);
+            border-radius: 12px;
+            padding: 10px 14px;
+            background: rgb(0 0 0 / 0.28);
+            color: var(--text);
             font: inherit;
             font-size: 16px;
+            transition: border-color 200ms ease, box-shadow 200ms ease;
         }
-        .password-switch { display: flex; align-items: center; gap: 10px; min-height: 44px; margin: -8px 0 16px; }
-        .password-switch input { width: 18px; height: 18px; margin: 0; accent-color: #c5b5f3; }
-        button, .button-link {
+        input:focus { outline: none; border-color: rgb(34 182 198 / 0.8); box-shadow: 0 0 0 3px rgb(34 182 198 / 0.18); }
+        .password { position: relative; }
+        .password input { padding-right: 52px; }
+        .reveal {
+            position: absolute;
+            top: 50%;
+            right: 2px;
+            width: 44px;
+            height: 44px;
+            margin-top: -22px;
+            display: grid;
+            place-items: center;
+            border: 0;
+            border-radius: 10px;
+            background: none;
+            color: var(--muted);
+            cursor: pointer;
+        }
+        .reveal:hover, .reveal[aria-pressed="true"] { color: #7fd3c4; }
+        .reveal svg { width: 20px; height: 20px; }
+        .reveal .eye-off, .reveal[aria-pressed="true"] .eye { display: none; }
+        .reveal[aria-pressed="true"] .eye-off { display: block; }
+        .primary, .secondary {
+            position: relative;
             display: flex;
             align-items: center;
             justify-content: center;
             width: 100%;
-            min-height: 46px;
+            min-height: 48px;
             padding: 11px 16px;
-            border: 1px solid transparent;
-            border-radius: 10px;
-            background: #c5b5f3;
-            color: #1e1632;
+            border-radius: 12px;
             font: inherit;
-            font-weight: 650;
+            font-weight: 700;
+            letter-spacing: 0.04em;
             text-decoration: none;
             cursor: pointer;
+            overflow: hidden;
+            transition: filter 200ms ease, transform 200ms var(--ease), border-color 200ms ease;
         }
-        .secondary { background: transparent; border-color: #596173; color: #edf0f5; margin-top: 12px; }
-        button:disabled, fieldset:disabled { opacity: .6; }
+        .primary {
+            margin-top: 6px;
+            border: 0;
+            background: var(--accent);
+            color: #101112;
+            box-shadow: 0 8px 24px rgb(34 182 198 / 0.16), 0 4px 18px rgb(245 187 43 / 0.1);
+        }
+        .primary:hover { filter: brightness(1.07); }
+        .primary:active { transform: scale(0.985); }
+        /* While a request is in flight the button carries the splash bar's shimmer. */
+        [aria-busy="true"] .primary::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.5), transparent);
+            transform: translateX(-100%);
+            animation: shimmer 2.2s ease-in-out infinite;
+        }
+        .secondary {
+            margin-top: 12px;
+            border: 1px solid rgb(255 255 255 / 0.14);
+            background: rgb(255 255 255 / 0.03);
+            color: var(--text);
+        }
+        .secondary:hover { border-color: rgb(127 211 196 / 0.5); }
+        button:disabled, fieldset:disabled { opacity: 0.6; }
         button:disabled { cursor: wait; }
-        :focus-visible { outline: 3px solid #c5b5f3; outline-offset: 3px; }
-        .message { margin: 20px 0 0; line-height: 1.6; overflow-wrap: anywhere; color: #b3bac9; }
+        :focus-visible { outline: 2px solid #7fd3c4; outline-offset: 3px; }
+        .message { margin: 18px 0 0; line-height: 1.6; overflow-wrap: anywhere; color: var(--muted); }
         .message:empty { display: none; }
-        .message[data-error="true"] { color: #ffb4b4; }
-        noscript p { line-height: 1.6; color: #ffb4b4; }
-        @media (max-width: 480px) { main { padding: 24px; } }
+        .message[data-error="true"] { color: #ff9f8f; }
+        noscript p { margin: 18px 0 0; line-height: 1.6; color: #ff9f8f; }
+        /* Phones: the content sits on the backdrop itself, like the splash, instead of in a card. */
+        @media (max-width: 480px) {
+            .panel { padding: 4px 4px 0; border: 0; background: none; box-shadow: none; }
+        }
+        @keyframes enter { from { opacity: 0; transform: translateY(14px) scale(0.9); } to { opacity: 1; transform: none; } }
+        @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+        @keyframes float { 0%, 100% { transform: none; } 50% { transform: translateY(-8px); } }
+        @keyframes shadow { 0%, 100% { opacity: 1; transform: none; } 50% { opacity: 0.55; transform: scale(0.8); } }
+        @keyframes drift-teal { from { transform: translate(-22%, -18%) scale(1); } to { transform: translate(-6%, -2%) scale(1.15); } }
+        @keyframes drift-gold { from { transform: translate(22%, 20%) scale(1.1); } to { transform: translate(6%, 4%) scale(0.95); } }
+        @keyframes shimmer { to { transform: translateX(100%); } }
+        @media (prefers-reduced-motion: reduce) {
+            .aurora, .brand, .logo, .logo-shadow, .panel, [aria-busy="true"] .primary::after { animation: none; }
+            .aurora--teal { transform: translate(-14%, -10%); }
+            .aurora--gold { transform: translate(14%, 12%); }
+            input, .primary, .secondary { transition: none; }
+        }
     </style>
 </head>
 <body data-mode="__MODE__">
+    <div class="aurora aurora--teal" aria-hidden="true"></div>
+    <div class="aurora aurora--gold" aria-hidden="true"></div>
     <main aria-labelledby="heading">
-        <p class="brand">TauriTavern</p>
-        <h1 id="heading">登录</h1>
-        <p id="description" class="description">使用已配置的用户名和密码进入应用。</p>
-        <form id="login-form" action="/__tt/auth/login" method="post" hidden>
-            <fieldset id="login-fields" disabled>
-                <div class="field">
-                    <label for="username">用户名</label>
-                    <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
-                </div>
-                <div class="field">
-                    <label for="password">密码</label>
-                    <input id="password" name="password" type="password" autocomplete="current-password" required>
-                </div>
-                <label class="password-switch" for="show-password">
-                    <input id="show-password" type="checkbox" aria-controls="password">
-                    显示密码
-                </label>
-                <button id="login-button" type="submit">登录</button>
-            </fieldset>
-        </form>
-        <section id="authenticated-actions" aria-label="登录状态操作" hidden>
-            <a class="button-link" href="/">进入应用</a>
-            <button id="logout-button" class="secondary" type="button" disabled>退出登录</button>
-        </section>
-        <a id="login-link" class="button-link" href="/login" hidden>前往登录</a>
-        <p id="message" class="message" role="status" aria-live="polite" aria-atomic="true">正在检查登录状态…</p>
-        <button id="retry-status" class="secondary" type="button" hidden>重新检查状态</button>
-        <p class="footnote">仅用于访问当前 TauriTavern，不创建新账户。</p>
-        <noscript><p>此页面需要 JavaScript 才能检查登录状态并安全提交。请启用后重新加载。</p></noscript>
+        <div class="brand" aria-hidden="true">
+            <img class="logo" src="__LOGO__" alt="" width="512" height="512" draggable="false">
+            <div class="logo-shadow"></div>
+        </div>
+        <div class="panel">
+            <h1 id="heading">登录</h1>
+            <p id="description" class="description">使用已配置的用户名和密码进入应用。</p>
+            <form id="login-form" action="/__tt/auth/login" method="post" hidden>
+                <fieldset id="login-fields" disabled>
+                    <div class="field">
+                        <label for="username">用户名</label>
+                        <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+                    </div>
+                    <div class="field">
+                        <label for="password">密码</label>
+                        <div class="password">
+                            <input id="password" name="password" type="password" autocomplete="current-password" required>
+                            <button id="show-password" class="reveal" type="button" aria-controls="password" aria-pressed="false" aria-label="显示密码">
+                                <svg class="eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+                                <svg class="eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.6 5.1A10.9 10.9 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.2M6.6 6.6A17.4 17.4 0 0 0 2 12s3.6 7 10 7a10.4 10.4 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="m3 3 18 18"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <button id="login-button" class="primary" type="submit">登录</button>
+                </fieldset>
+            </form>
+            <section id="authenticated-actions" aria-label="退出登录操作" hidden>
+                <button id="logout-button" class="primary" type="button" disabled>确认退出登录</button>
+                <a class="secondary" href="/">返回应用</a>
+            </section>
+            <a id="login-link" class="primary" href="/login" hidden>前往登录</a>
+            <p id="message" class="message" role="status" aria-live="polite" aria-atomic="true">正在检查登录状态…</p>
+            <button id="retry-status" class="secondary" type="button" hidden>重新检查状态</button>
+            <noscript><p>此页面需要 JavaScript 才能检查登录状态并安全提交。请启用后重新加载。</p></noscript>
+        </div>
     </main>
     <script nonce="__NONCE__">
         (() => {
@@ -138,6 +265,12 @@
                 message.dataset.error = String(isError);
             }
 
+            function revealPassword(visible) {
+                password.type = visible ? 'text' : 'password';
+                showPassword.setAttribute('aria-pressed', String(visible));
+                showPassword.setAttribute('aria-label', visible ? '隐藏密码' : '显示密码');
+            }
+
             function setBusy(value) {
                 busy = value;
                 fields.disabled = value;
@@ -146,7 +279,7 @@
                 form.setAttribute('aria-busy', String(value));
                 actions.setAttribute('aria-busy', String(value));
                 loginButton.textContent = value ? '正在登录…' : '登录';
-                logoutButton.textContent = value ? '正在退出…' : mode === 'logout' ? '确认退出登录' : '退出登录';
+                logoutButton.textContent = value ? '正在退出…' : '确认退出登录';
             }
 
             function renderState(value) {
@@ -155,9 +288,9 @@
                 actions.hidden = !value;
                 loginLink.hidden = value || mode === 'login';
                 retryStatus.hidden = true;
-                heading.textContent = mode === 'logout' ? '退出登录' : value ? '已登录' : '登录';
+                heading.textContent = mode === 'logout' ? '退出登录' : '登录';
                 description.textContent = value
-                    ? mode === 'logout' ? '确认退出当前浏览器的登录？关联的应用页面连接也将结束。' : '当前浏览器已登录，你可以进入应用或退出登录。'
+                    ? '确认退出当前浏览器的登录？关联的应用页面连接也将结束。'
                     : mode === 'logout' ? '当前浏览器尚未登录。' : '使用已配置的用户名和密码进入应用。';
             }
 
@@ -182,6 +315,13 @@
                         retryStatus.hidden = false;
                         return;
                     }
+                    // The server already redirects signed-in browsers; this covers a login that
+                    // completed in another tab after this page loaded.
+                    if (data.authenticated && mode === 'login') {
+                        showMessage('已登录，正在进入应用…');
+                        location.replace('/');
+                        return;
+                    }
                     renderState(data.authenticated);
                     showMessage('');
                 } catch {
@@ -192,8 +332,8 @@
                 }
             }
 
-            showPassword.addEventListener('change', () => {
-                password.type = showPassword.checked ? 'text' : 'password';
+            showPassword.addEventListener('click', () => {
+                revealPassword(password.type === 'password');
             });
 
             form.addEventListener('submit', async (event) => {
@@ -238,9 +378,6 @@
                         showMessage(responseError(await readJson(response), '退出未成功，请稍后重试。'), true);
                         return;
                     }
-                    password.value = '';
-                    showPassword.checked = false;
-                    password.type = 'password';
                     renderState(false);
                     showMessage('已退出登录。');
                 } catch {

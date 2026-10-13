@@ -202,16 +202,21 @@ fn auth_error(status: StatusCode, message: &str) -> Response {
     response
 }
 
+/// Entry documents move between the login page and the application without being cached.
+fn see_other(location: &'static str) -> Response {
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    response
+        .headers_mut()
+        .insert(header::LOCATION, HeaderValue::from_static(location));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
 fn login_required(request: &Request) -> Response {
     if document_navigation(request) {
-        let mut response = StatusCode::SEE_OTHER.into_response();
-        response
-            .headers_mut()
-            .insert(header::LOCATION, HeaderValue::from_static("/login"));
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        response
+        see_other("/login")
     } else {
         auth_error(StatusCode::UNAUTHORIZED, "请先登录后再继续操作。")
     }
@@ -263,11 +268,23 @@ async fn authenticate(State(host): State<Arc<Host>>, request: Request, next: Nex
     response
 }
 
+/// The login page cannot load authenticated static files, so it embeds the boot splash logo.
+/// The bytes come from the same file as the splash, keeping one source for the brand image.
+static LOGIN_LOGO: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    use base64::Engine;
+    let logo = include_bytes!("../../../../src/img/logo.png");
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(logo)
+    )
+});
+
 fn auth_page(mode: &str) -> Response {
     let nonce = random_token();
     let html = include_str!("login.html")
         .replace("__MODE__", mode)
-        .replace("__NONCE__", &nonce);
+        .replace("__NONCE__", &nonce)
+        .replace("__LOGO__", &LOGIN_LOGO);
     let mut response = (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
@@ -277,7 +294,7 @@ fn auth_page(mode: &str) -> Response {
     )
         .into_response();
     let policy = format!(
-        "default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+        "default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; img-src data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     );
     response.headers_mut().insert(
         "content-security-policy",
@@ -286,7 +303,12 @@ fn auth_page(mode: &str) -> Response {
     response
 }
 
-async fn login_page() -> Response {
+/// A signed-in browser has nothing to do on the login page: it goes straight to the application
+/// and its loading screen. Signing out stays on the explicit `/logout` confirmation.
+async fn login_page(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
+    if host.security.authenticate(&headers).is_ok() {
+        return see_other("/");
+    }
     auth_page("login")
 }
 
@@ -1195,6 +1217,8 @@ mod tests {
             assert!(policy.contains(&format!("script-src 'nonce-{nonce}'")));
             assert!(policy.contains(&format!("style-src 'nonce-{nonce}'")));
             assert!(html.contains(&format!("data-mode=\"{mode}\"")));
+            assert!(html.contains("src=\"data:image/png;base64,"));
+            assert!(!html.contains("__LOGO__"));
             nonces.push(nonce.to_owned());
         }
         assert_ne!(nonces[0], nonces[1]);
