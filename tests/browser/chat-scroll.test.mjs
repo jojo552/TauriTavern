@@ -18,6 +18,10 @@ test('composer expansion cannot scroll backwards between appending a message and
     window.CSS.supports = (...args) => args[0] === 'field-sizing' ? true : supports(...args);
     await startHost();
     const main = (await load('script.js')).namespace;
+    main.reloadMarkdownProcessor();
+    (await load('scripts/chats.js')).namespace.addDOMPurifyHooks();
+    (await load('tauri/main/services/chat-surface/chat-virtualization-state.js')).namespace
+        .initializeChatVirtualization({ chat_virtualization_enabled: false });
     const ross = (await load('scripts/RossAscends-mods.js')).namespace;
     const { power_user } = (await load('scripts/power-user.js')).namespace;
     power_user.auto_connect = false;
