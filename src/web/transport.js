@@ -23,6 +23,13 @@ export class WebSessionResetError extends Error {
 }
 export function isWebSessionResetError(error) { return error instanceof WebSessionResetError; }
 
+export class WebAuthenticationError extends Error {
+    constructor() {
+        super('登录状态已失效，请通过登录页重新登录。当前操作不会自动重发。');
+        this.name = 'WebAuthenticationError';
+    }
+}
+
 async function gzip(bytes) {
     const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
     return new Uint8Array(await new Response(stream).arrayBuffer());
@@ -155,6 +162,10 @@ export function createWebTransport({
     function fail(error) {
         if (failure) return;
         failure = error;
+        if (error instanceof WebAuthenticationError) {
+            epoch += 1;
+            resources.reset();
+        }
         source?.close();
         source = undefined;
         clearConnectionTimer();
@@ -188,6 +199,10 @@ export function createWebTransport({
     }
 
     async function responseValue(response, context, signal) {
+        // Only the HTTP authentication boundary sets this header, not command authorization errors.
+        if (response.status === 401 && response.headers.get('x-tt-login-required') === '1') {
+            throw new WebAuthenticationError();
+        }
         if (response.status === 204 && response.ok) return null;
         const type = response.headers.get('content-type')?.split(';')[0].trim();
         if (type === 'application/json') {
@@ -299,21 +314,27 @@ export function createWebTransport({
     async function openConnection(generation, ready) {
         if (generation !== epoch || failure) return;
         try {
-            if (!session) {
-                const controller = sessionRequest = new AbortController();
-                const response = await fetch('/__tt/session', {
-                    credentials: 'same-origin', cache: 'no-store', headers: { accept: 'application/json' },
-                    signal: controller.signal,
-                }).catch(cause => {
-                    controller.signal.throwIfAborted();
-                    throw new WebConnectionError('Web session: connection lost before session creation could be confirmed', { cause });
-                });
-                const created = await responseValue(response, 'Web session', controller.signal);
-                if (generation !== epoch || failure || sessionRequest !== controller) return;
-                if (typeof created?.sessionId !== 'string' || !created.sessionId || typeof created.csrfToken !== 'string' || !created.csrfToken) throw new Error('Web session requires sessionId and csrfToken');
-                session = created;
-                sessionRequest = undefined;
+            const creating = !session;
+            const controller = sessionRequest = new AbortController();
+            // EventSource hides HTTP status. Confirm authentication on the existing recovery path
+            // before reopening a stream, including after a sleeping tab missed logout/expiry.
+            const response = await fetch(creating ? '/__tt/session' : '/__tt/auth/status', {
+                credentials: 'same-origin', cache: 'no-store', headers: { accept: 'application/json' },
+                signal: controller.signal,
+            }).catch(cause => {
+                controller.signal.throwIfAborted();
+                throw new WebConnectionError('Web session: connection lost before readiness could be confirmed', { cause });
+            });
+            const value = await responseValue(response, 'Web session', controller.signal);
+            if (generation !== epoch || failure || sessionRequest !== controller) return;
+            if (creating) {
+                if (typeof value?.sessionId !== 'string' || !value.sessionId || typeof value.csrfToken !== 'string' || !value.csrfToken) throw new Error('Web session requires sessionId and csrfToken');
+                session = value;
+            } else {
+                if (typeof value?.authenticated !== 'boolean') throw new Error('Web authentication status requires authenticated');
+                if (!value.authenticated) throw new WebAuthenticationError();
             }
+            sessionRequest = undefined;
             connect(generation, ready);
         } catch (error) {
             if (generation !== epoch || failure) return;
@@ -430,6 +451,9 @@ export function createWebTransport({
             if (generation !== epoch) throw new WebSessionResetError();
             if (command === 'close_resource') resources.release(args.rid);
             return resources.accept(command, value);
+        } catch (error) {
+            if (error instanceof WebAuthenticationError) fail(error);
+            throw error;
         } finally {
             requests.delete(request);
             options.signal?.removeEventListener('abort', abort);

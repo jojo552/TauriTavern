@@ -17,10 +17,16 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 
 ## 2. 认证、页面 session 与 CSRF
 
-[host.rs](../../src-tauri/crates/tt-server/src/host.rs) 的全部 HTTP 路由，包括静态资源与下载，都经过 Basic 认证。[security.rs](../../src-tauri/crates/tt-server/src/security.rs) 校验配置的精确 Host；页面 session、invoke、SSE 与下载还会拒绝不匹配的 Origin / 跨站 Fetch Metadata，不信任 forwarded host/origin。
+[host.rs](../../src-tauri/crates/tt-server/src/host.rs) 使用独立登录页与 Cookie 认证，不再接受 HTTP Basic，也不发浏览器原生登录挑战。CLI `username` / `password-file` 仍定义同一单用户凭据；这不是上游多用户账户系统。[security.rs](../../src-tauri/crates/tt-server/src/security.rs) 对公开及受保护入口共同校验精确 Host，不信任 forwarded host/origin。
+
+- 公开页面只有 `/login`、`/logout`，由独立 [login.html](../../src-tauri/crates/tt-server/src/login.html) 提供，无主应用依赖、外链资源或客户端秘密；响应 `no-store`，内联 script/style 用随机 nonce CSP，禁止被 frame 嵌入。访问 `/logout` 不产生退出副作用，需要主动确认。
+- `GET /__tt/auth/status` 只返回 `{authenticated:boolean}`，不创建 page session。`POST /__tt/auth/login` 提交 JSON `{username,password}`，成功只返回 `{ok:true}` 并固定进入 `/`；没有外部 return URL。密码不写入 URL、storage 或日志。登录/退出 body 最多 8 KiB，必须精确同源 Origin；提供 Fetch Metadata 时还必须 `same-origin`。错误账号密码统一 401，无用户名枚举；失败限流为有界单用户窗口，不信任 forwarded IP。
+- 登录发放随机 `tt_auth`（固定 7 天）和身份 Cookie `tt_browser`（30 天），均 `HttpOnly; SameSite=Strict; Path=/`，HTTPS 加 `Secure`。最多 64 个登录，认证注册表在宿主内存中；服务器重启需要重新登录，不新增账户数据库。`tt_browser` 只用于浏览器归属，不能单独授权。
+- 未登录文档入口转至 `/login`；API、静态脚本、SSE 和下载返回 401 JSON 与 `x-tt-login-required: 1`，不返回伪登录 HTML，也不发 `WWW-Authenticate`。Origin/页面 CSRF/资源归属等命令授权拒绝继续使用原有错误契约，不能当作登录失效。
+- `POST /__tt/auth/logout` 撤销认证并清除 auth Cookie；页面登记、流认领与撤销共用同一 registry 串行边界。已连接 SSE 在认证截止或撤销时也停止，旧页工具/reader/commit 复用既有关闭清理，不等流自己断开。身份 Cookie 不删除，普通 completion jobs 仅分离页面、继续受原有 2 小时保留规则约束，重新登录后可恢复原任务。
 
 1. [transport](../../src/web/transport.js) 以同源凭据请求 `GET /__tt/session`，取得随机 `sessionId` 与 `csrfToken`；响应为 `no-store`。
-2. 服务端用 `tt_browser` Cookie 绑定浏览器：`HttpOnly; SameSite=Strict; Path=/`，HTTPS origin 再加 `Secure`。同一 Cookie 下各页面仍分别创建 session。
+2. 服务端用登录已确认的 `tt_browser` 身份绑定浏览器；同一 Cookie 下各页面仍分别创建 session，关联当前认证 lease，但不把认证 token 用作资源或模型任务身份。
 3. `GET /__tt/events?sessionId=...` 校验 session 属于该 Cookie；同页新的 SSE 接入会替代旧流。transport 收到匹配 session 的首个 `ready` 帧后才允许 invoke 正常开始。断线重开带 `after` cursor；原生 `Last-Event-ID` 也进入同一校验入口，同时提供的 cursor 必须一致。
 4. `POST /__tt/invoke` 的 JSON envelope 为 `{ sessionId, command, args }`，每次 invoke 都携带并校验 `x-tt-csrf`，不仅是写命令。共享 `/csrf-token` 路由返回这个真实 token；原生 Tauri 的兼容 token 不能用于 HTTP host。
 
@@ -42,7 +48,7 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 - `channel` 帧带从 0 开始、严格递增的 `sequence`；序号分配、入队和结束共用 Channel 的串行边界，支持并发任务共享 sink。`channel-end` 结束该 Channel；前端拒绝未知或乱序帧。
 - Channel 生命周期由后端持有它的任务/注册项决定，不在每次发起它的 invoke 返回时一律删除；实时消费者也不能因独立 HTTP 请求成功就丢弃稍后到达的帧。订阅主动取消或 Channel 结束才停止交付，同 session 短暂断线保留 channels、listeners 与资源。
 - 数据帧还有页面级 SSE `id`；ready/reset 控制帧无 id，不能推进数据 cursor。PageBus 保存最多 4096 帧、总序列化 JSON 16 MiB 的滚动回放窗口，淘汰最旧帧不是永久毒化在线页面。cursor 落在窗口外、在线消费者落后或超大单帧时明确 reset；字节上限不是上游 Value 构造的瞬时内存上限。
-- SSE 断线后，transport 关闭旧 EventSource，以 1 秒到最多 10 秒退避显式重开同页 SSE，从最后已派发 `id` 继续，不重新执行已经派发的异步回调。visibility 恢复、online、BFCache pageshow 与真实 HTTP 网络失联共用这一恢复路径，不无条件拆除健康连接；单个定时器负责退避或 90 秒静默检查，旧 source/epoch/定时器回调都有 fence。服务端约每 20 秒发无 id 的 `{type:'heartbeat',sessionId}`，不入 PageBus、不推进数据 cursor；浏览器挂起时不能保证按墙钟准时检测。初始化和新 session GET 的明确网络失败也沿此退避等待，认证、有效 CommandError 和协议错误仍终止并传播。可恢复断线和自动 session 重建全程静默，transport 不弹任何连接层提示（与 Luke 一致）；transport 因协议/认证错误停止时只经共享错误通道报告。具体操作的保存结果未知、资源失效等错误仍由调用方独立报告，不因静默重连而被吞掉。
+- SSE 断线后，transport 关闭旧 EventSource，以 1 秒到最多 10 秒退避显式重开同页 SSE，从最后已派发 `id` 继续，不重新执行已经派发的异步回调。visibility 恢复、online、BFCache pageshow 与真实 HTTP 网络失联共用这一恢复路径，不无条件拆除健康连接；单个定时器负责退避或 90 秒静默检查，旧 source/epoch/定时器回调都有 fence。服务端约每 20 秒发无 id 的 `{type:'heartbeat',sessionId}`，不入 PageBus、不推进数据 cursor；浏览器挂起时不能保证按墙钟准时检测。初始化和新 session GET 的明确网络失败也沿此退避等待，认证、有效 CommandError 和协议错误仍终止并传播。可恢复断线和自动 session 重建全程静默，transport 不弹任何连接层提示（与 Luke 一致）；transport 因协议/认证错误停止时只经共享错误通道报告。同页 SSE 重开前在这一连接路径检查 auth status，因为 EventSource 不暴露 401；睡眠页错过注销也不能无限重试。状态明确未认证或 HTTP 401 的登录专用 header 会终止 transport、失效资源并拒绝 pending，不重发命令。已打开应用保留 DOM 内容，经独立登录入口重新登录；不为了跳登录页丢弃未保存内容，重载前须复制或按现有未保存流程处理。具体操作的保存结果未知、资源失效等错误仍由调用方独立报告，不因静默重连而被吞掉。
 - SSE 本身断开不强制中止仍可得到成功响应的 HTTP 保存。实际 HTTP 中断只报告结果未知，绝不自动重放 invoke；一次性 commit 的 offset 与最终确认规则保持不变。
 - 合法 owner 的 session 消失（服务器重启/过期）或回放 gap，服务器返回无 id `{type:'session-reset', reason:'expired'|'gap'}`，结束旧页。前端创建新 session/CSRF，失败的旧请求不重放；后续独立请求可继续。错误 origin/cookie 仍拒绝，不能伪装为 reset。
 
@@ -84,7 +90,7 @@ HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { pl
 数据归档导出和用户备份复用共享归档服务；[archive commands](../../src-tauri/crates/tt-server/src/commands/archives.rs) 将宿主产物注册为 `/__tt/download/<token>`，返回同源 URL 与文件名，不把下载磁盘路径交给浏览器。
 
 - [download registry](../../src-tauri/crates/tt-server/src/downloads.rs) 的 token 绑定 `tt_browser` Cookie，**不是页面 session 绑定**；最多 32 个待下载产物，当前有效期为 10 分钟。
-- 匹配浏览器首次取用即消费 token；token 不存在、Cookie 不匹配、过期或已用返回 404，登记文件已丢失返回 410。路由仍须通过 Basic 认证，未认证为 401。不能将一次性 URL 作为可重复读取或断点恢复入口。
+- 匹配浏览器首次取用即消费 token；token 不存在、Cookie 不匹配、过期或已用返回 404，登记文件已丢失返回 410。路由仍须通过登录 Cookie 认证，未认证为 401。不能将一次性 URL 作为可重复读取或断点恢复入口。
 - 响应使用 `Content-Disposition` 和 `no-store`；响应 body 结束、失败或中止后删除宿主产物，未取用产物到期后清理。服务端交付与清理不代表浏览器已经保存到本机磁盘。
 - `downloadUrl()` 只接受无 URL 凭据的同源 HTTP(S) URL；浏览器远程导出也只接受同源内容。跨域导出必须另行由宿主生成下载产物，不能靠原生插件或任意服务端路径绕过。
 

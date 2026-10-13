@@ -626,14 +626,26 @@ mod tests {
             &url::Url::parse("https://tt.example").unwrap(),
         )
         .unwrap();
-        let (first, _) = security.create_session(&HeaderMap::new()).unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "cookie",
-            format!("tt_browser={}", first.browser).parse().unwrap(),
-        );
-        let (second, _) = security.create_session(&headers).unwrap();
-        let (other_browser, _) = security.create_session(&HeaderMap::new()).unwrap();
+        let authenticated = || {
+            let login = security
+                .login(&HeaderMap::new(), "tt", "a-long-password-for-tests-only")
+                .unwrap();
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "cookie",
+                format!(
+                    "tt_browser={}; tt_auth={}",
+                    login.authentication.browser, login.authentication.id
+                )
+                .parse()
+                .unwrap(),
+            );
+            headers
+        };
+        let headers = authenticated();
+        let first = security.create_session(&headers).unwrap();
+        let second = security.create_session(&headers).unwrap();
+        let other_browser = security.create_session(&authenticated()).unwrap();
         (first, second, other_browser)
     }
 

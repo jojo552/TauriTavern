@@ -31,8 +31,6 @@ const {
     updateTauriTavernSettings,
     openDialog,
     setDataRoot,
-    initializeBridge,
-    waitUntilWebConnected,
 } = await import(pathToFileURL(tauriBridgePath).href);
 
 test('updateTauriTavernSettings contract validation', async (t) => {
@@ -89,11 +87,14 @@ test('openDialog contract validation', async (t) => {
 
 });
 
-test('browser recovery shows no connection-level toast, only the shared error report when stopped', async () => {
+for (const authenticationLost of [false, true]) {
+test(`browser recovery stays silent; ${authenticationLost ? 'expired login offers a separate page without discarding content' : 'protocol failure only reports its error'}`, async () => {
+    const { initializeBridge, waitUntilWebConnected, invoke } = await import(pathToFileURL(tauriBridgePath).href + `?authenticationLost=${authenticationLost}`);
     const keys = ['window', 'document', 'fetch', 'EventSource', 'toastr', 'reportError', 'setTimeout', 'clearTimeout'];
     const previous = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
     const restoreHost = installHostIdentity({ platform: 'browser', kind: 'web' });
-    const warnings = [], errors = [], timers = new Map();
+    const warnings = [], errors = [], timers = new Map(), opened = [], navigated = [];
+    let denyAuth = false;
     let nextTimer = 0, sessions = 0, nextSource = Promise.withResolvers();
     class Events {
         constructor() { nextSource.resolve(this); }
@@ -102,7 +103,10 @@ test('browser recovery shows no connection-level toast, only the shared error re
     }
     try {
         globalThis.window = new EventTarget();
+        globalThis.window.open = (...args) => opened.push(args);
+        globalThis.window.location = { assign: (...args) => navigated.push(args), replace: (...args) => navigated.push(args) };
         globalThis.document = new EventTarget();
+        globalThis.document.unsavedInput = 'unsaved draft';
         globalThis.document.visibilityState = 'hidden';
         globalThis.EventSource = Events;
         globalThis.toastr = { warning: (...args) => warnings.push(args) };
@@ -110,11 +114,13 @@ test('browser recovery shows no connection-level toast, only the shared error re
         globalThis.setTimeout = (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; };
         globalThis.clearTimeout = id => timers.delete(id);
         globalThis.fetch = async (url, init) => {
+            if (url === '/__tt/auth/status') return Response.json({ authenticated: true });
             if (url === '/__tt/session') {
                 sessions++;
                 return Response.json({ sessionId: `page-${sessions}`, csrfToken: `csrf-${sessions}` });
             }
             assert.equal(url, '/__tt/invoke');
+            if (denyAuth) return Response.json({ error: 'Login required' }, { status: 401, headers: { 'x-tt-login-required': '1' } });
             assert.equal(JSON.parse(init.body).command, 'is_ready');
             return Response.json(true);
         };
@@ -143,9 +149,21 @@ test('browser recovery shows no connection-level toast, only the shared error re
         await waitUntilWebConnected();
         assert.deepEqual(warnings, [], 'Successful automatic session replacement is not a reload request');
 
-        replacement.frame({ type: 'heartbeat', sessionId: 'wrong-page' });
-        await assert.rejects(waitUntilWebConnected(), /another session/);
-        assert.deepEqual(warnings, [], 'The transport adds no connection-level toast, even when it stops');
+        if (authenticationLost) {
+            denyAuth = true;
+            await assert.rejects(invoke('save_settings'), { name: 'WebAuthenticationError' });
+            assert.equal(warnings.length, 1);
+            assert.equal(opened.length, 0);
+            assert.equal(navigated.length, 0, 'Authentication expiry must not navigate away from unsaved content');
+            assert.equal(globalThis.document.unsavedInput, 'unsaved draft');
+            warnings[0][2].onclick();
+            assert.deepEqual(opened, [['/login', '_blank', 'noopener,noreferrer']]);
+            assert.equal(navigated.length, 0);
+        } else {
+            replacement.frame({ type: 'heartbeat', sessionId: 'wrong-page' });
+            await assert.rejects(waitUntilWebConnected(), /another session/);
+            assert.deepEqual(warnings, [], 'The transport adds no connection-level toast, even when it stops');
+        }
         assert.equal(errors.length, 1, 'The fatal error remains reported, not swallowed');
         assert.equal(timers.size, 0);
         replacement.onerror();
@@ -158,6 +176,7 @@ test('browser recovery shows no connection-level toast, only the shared error re
         }
     }
 });
+}
 
 test('setDataRoot contract validation', async (t) => {
     await t.test('accepts valid non-empty path string', async () => {

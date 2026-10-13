@@ -204,6 +204,7 @@ test('browser generation recovery uses the normal decoder, message finalization 
         main.setAnimationDuration(0);
 
         window.fetch = async (url, options = {}) => {
+            if (url === '/__tt/auth/status') return window.Response.json({ authenticated: true });
             if (url === '/__tt/session') {
                 webSession = { sessionId: 'recovery-page', csrfToken: 'recovery-csrf' };
                 return window.Response.json(webSession);

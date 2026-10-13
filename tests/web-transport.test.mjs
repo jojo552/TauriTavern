@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWebTransport, isWebConnectionError, isWebSessionResetError } from '../src/web/transport.js';
+import { createWebTransport, isWebConnectionError, isWebSessionResetError, WebAuthenticationError } from '../src/web/transport.js';
 import { createAgentRunLiveSubscribe } from '../src/tauri/main/api/agent-run-live-subscription.js';
 import { gunzipSync } from 'node:zlib';
 import { installHostIdentity } from './helpers/host-identity.mjs';
@@ -29,6 +29,7 @@ function harness() {
     }
     const streamReady = Promise.withResolvers();
     let reply = () => Response.json(null);
+    let authReply = () => Response.json({ authenticated: true });
     let sessionReply = (init, created) => Response.json({ sessionId: `session-${created}`, csrfToken: `csrf-${created}` });
     let created = 0;
     let nextStream;
@@ -48,6 +49,7 @@ function harness() {
         unschedule: id => timers.delete(id),
         fetch: async (url, init) => {
             calls.push({ url, ...init });
+            if (url === '/__tt/auth/status') return authReply(init);
             if (url === '/__tt/session') {
                 created++;
                 return sessionReply(init, created);
@@ -72,7 +74,13 @@ function harness() {
         await started;
         return next;
     }
-    return { transport, calls, errors, streams, timers, reset, streamReady: streamReady.promise, ready,
+    async function resume() {
+        nextStream = Promise.withResolvers();
+        runNextTimer();
+        return nextStream.promise;
+    }
+    return { transport, calls, errors, streams, timers, reset, resume, streamReady: streamReady.promise, ready,
+        authReply: handler => { authReply = handler; },
         window, document, emit, advance, runNextTimer, jump: ms => { clock += ms; },
         reply: handler => { reply = handler; }, sessionReply: handler => { sessionReply = handler; } };
 }
@@ -91,8 +99,7 @@ test('live projection receives replay after the HTTP subscription finishes, unti
     stream.onerror();
     confirmed.resolve(Response.json(null));
     await new Promise(resolve => setImmediate(resolve));
-    h.runNextTimer();
-    const resumed = h.streams.at(-1);
+    const resumed = await h.resume();
     resumed.frame({ type: 'ready', sessionId: 'session-1' });
     const snapshot = { type: 'snapshot', calls: [], responses: [] };
     resumed.frame({ type: 'channel', channelId: request.args.channel.$channel, sequence: 0, payload: snapshot }, '0');
@@ -200,9 +207,8 @@ test('same-page reconnect resumes channels exactly once without cancelling or re
     assert.equal(request.signal.aborted, false, 'SSE loss is not HTTP save failure');
     completed.resolve(Response.json({ ok: true }));
     assert.deepEqual(await save, { ok: true });
-    const before = h.calls.length;
-    h.runNextTimer();
-    const resumed = h.streams.at(-1);
+    const before = h.calls.filter(call => call.url === '/__tt/invoke').length;
+    const resumed = await h.resume();
     assert.match(resumed.url, /sessionId=session-1&after=0/);
     resumed.frame({ type: 'ready', sessionId: 'session-1' });
     resumed.frame({ type: 'channel', channelId, sequence: 0, payload: 'duplicate' }, '0');
@@ -212,7 +218,7 @@ test('same-page reconnect resumes channels exactly once without cancelling or re
     resumed.frame({ type: 'event', event: 'change', id: 8, payload: 'no' }, '3');
     assert.deepEqual(values, ['first', 'second']);
     assert.deepEqual(events, ['yes']);
-    assert.equal(h.calls.length, before, 'never replays the save');
+    assert.equal(h.calls.filter(call => call.url === '/__tt/invoke').length, before, 'never replays the save');
     assert.deepEqual(h.errors, []);
     resumed.frame({ type: 'channel-end', channelId }, '4');
     assert.throws(() => JSON.stringify(channel), /no longer active/);
@@ -231,14 +237,41 @@ test('failed HTTP commands report unknown outcomes once; later requests are stil
     h.transport.recoverConnection();
     h.transport.recoverConnection();
     const connected = h.transport.waitUntilConnected();
-    h.runNextTimer();
-    const resumed = h.streams.at(-1);
+    const resumed = await h.resume();
     resumed.frame({ type: 'ready', sessionId: 'session-1' });
     await connected;
-    assert.equal(h.calls.length, 2, 'recovery never resends the unknown save');
+    assert.equal(h.calls.filter(call => call.url === '/__tt/invoke').length, 1, 'recovery never resends the unknown save');
     h.reply(() => Response.json(true));
     assert.equal(await h.transport.invoke('is_ready'), true);
-    assert.equal(h.calls.length, 3);
+    assert.equal(h.calls.filter(call => call.url === '/__tt/invoke').length, 2);
+});
+
+test('lost authentication stops HTTP and sleeping-tab recovery without replaying writes or reopening SSE', async () => {
+    for (const loss of ['http', 'sleep']) {
+        const h = harness();
+        const stream = await h.ready();
+        if (loss === 'http') {
+            h.reply(() => Response.json({ error: 'Login required' }, { status: 401, headers: { 'x-tt-login-required': '1' } }));
+            await assert.rejects(h.transport.invoke('save_settings'), WebAuthenticationError);
+        } else {
+            h.authReply(() => Response.json({ authenticated: false }));
+            h.jump(90_000);
+            h.emit(h.document, 'visibilitychange');
+            const failed = assert.rejects(h.transport.waitUntilConnected(), WebAuthenticationError);
+            h.runNextTimer();
+            await failed;
+        }
+        assert.equal(stream.closed, true);
+        assert.equal(h.errors.length, 1);
+        assert.equal(h.timers.size, 0);
+        assert.equal(h.streams.length, 1);
+        assert.equal(h.transport.sessionEpoch(), 1);
+        const before = h.calls.length;
+        await assert.rejects(h.transport.invoke('save_settings'), WebAuthenticationError);
+        h.emit(h.window, 'online');
+        stream.onerror();
+        assert.equal(h.calls.length, before, 'no replay or auth retry after authentication is known lost');
+    }
 });
 
 test('wake signals keep healthy SSE, merge stale recovery, and fence late frames and cancelled timers', async () => {
@@ -264,8 +297,7 @@ test('wake signals keep healthy SSE, merge stale recovery, and fence late frames
     oldTimer(); // It may already be queued despite clearTimeout.
     assert.equal(h.streams.length, 1);
     const connected = h.transport.waitUntilConnected();
-    h.runNextTimer();
-    const resumed = h.streams.at(-1);
+    const resumed = await h.resume();
     wake();
     h.transport.recoverConnection();
     stream.onerror();
@@ -297,8 +329,7 @@ test('observable heartbeats maintain liveness without advancing the data cursor 
     stream.frame({ type: 'heartbeat', sessionId: 'session-1' }); // Inherits SSE lastEventId=0.
     h.advance(90_000);
     assert.equal(stream.closed, true, 'silent half-open SSE is actively recovered');
-    h.runNextTimer();
-    const resumed = h.streams.at(-1);
+    const resumed = await h.resume();
     assert.equal(new URL(resumed.url, 'http://host').searchParams.get('after'), '0');
     resumed.frame({ type: 'ready', sessionId: 'session-1' });
     resumed.frame({ type: 'channel', channelId, sequence: 1, payload: 'second' }, '1');
@@ -317,8 +348,7 @@ test('connected waiters cancel independently and surviving waiters follow replac
     const connected = h.transport.waitUntilConnected();
     controller.abort(reason);
     await rejected;
-    h.runNextTimer();
-    const resumed = h.streams.at(-1);
+    const resumed = await h.resume();
     h.sessionReply((init, attempt) => {
         if (attempt === 2) throw new TypeError('offline while replacing session');
         return Response.json({ sessionId: `session-${attempt}`, csrfToken: `csrf-${attempt}` });

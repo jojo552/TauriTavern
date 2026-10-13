@@ -1,7 +1,7 @@
 // Core Tauri bridge for frontend modules.
 
 import { SILLYTAVERN_COMPAT_VERSION } from './compat-version.js';
-import { createWebTransport } from './web/transport.js';
+import { createWebTransport, WebAuthenticationError } from './web/transport.js';
 import { isWebHost } from './scripts/util/host-identity.js';
 
 export { isWebHost };
@@ -19,7 +19,20 @@ function getWebTransport() {
     if (webTransport) return webTransport;
     // Recoverable disconnects and session replacement are silent, as in Luke. Operations report
     // their own failures; a stopped transport reports through the shared error channel.
-    webTransport = createWebTransport();
+    webTransport = createWebTransport({
+        onError(error) {
+            if (globalThis.reportError) globalThis.reportError(error);
+            else console.error(error);
+            if (error instanceof WebAuthenticationError) {
+                // Keep this page's unsaved content available. Login in another tab, then reload
+                // through the application's ordinary unsaved-work checks; never replay a write.
+                globalThis.toastr?.warning?.('登录已失效。点击打开登录页；重新登录后，请先复制未保存内容，再刷新本页。', '需要重新登录', {
+                    timeOut: 0, extendedTimeOut: 0,
+                    onclick: () => window.open('/login', '_blank', 'noopener,noreferrer'),
+                });
+            }
+        },
+    });
     return webTransport;
 }
 

@@ -1,56 +1,47 @@
 // Verifies server push over the page event stream: a channel registered by invoke receives
 // frames, and closing the page tears down its registrations (the tool disappears from the list).
 // Usage: TT_PASSWORD=... node web-channel-probe.mjs <base>
+import { createEventReader, createWebServerClient } from './web-server-client.mjs';
+
 const [base] = process.argv.slice(2);
-const auth = 'Basic ' + Buffer.from(`tt:${process.env.TT_PASSWORD}`).toString('base64');
-const host = new URL(base).host;
+if (!base) throw new Error('usage: web-channel-probe.mjs <base>');
+const password = process.env.TT_PASSWORD;
+if (!password) throw new Error('TT_PASSWORD is required');
+const publicOrigin = process.env.TT_PUBLIC_ORIGIN ?? new URL(base).origin;
 const check = (c, m) => { if (!c) throw new Error(m); };
 
 async function openPage() {
-    const h = extra => ({ authorization: auth, host, origin: base, 'sec-fetch-site': 'same-origin', ...extra });
-    const s = await fetch(base + '/__tt/session', { headers: h() });
-    const cookie = s.headers.get('set-cookie').split(';')[0];
-    const session = await s.json();
+    const client = createWebServerClient(base, { publicOrigin });
+    await client.login(process.env.TT_USER ?? 'tt', password);
+    const created = await client.request('/__tt/session');
+    check(created.ok, `session failed ${created.status}`);
+    const session = await created.json();
     const controller = new AbortController();
-    const events = await fetch(`${base}/__tt/events?sessionId=${session.sessionId}`, { headers: h({ cookie }), signal: controller.signal });
-    const reader = events.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    async function nextFrame() {
-        for (;;) {
-            const end = buffer.indexOf('\n\n');
-            if (end >= 0) {
-                const chunk = buffer.slice(0, end); buffer = buffer.slice(end + 2);
-                const data = chunk.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n');
-                if (data) return JSON.parse(data);
-                continue;
-            }
-            const { value, done } = await reader.read();
-            if (done) throw new Error('event stream ended');
-            buffer += decoder.decode(value, { stream: true });
-        }
-    }
+    const events = await client.request(`/__tt/events?sessionId=${session.sessionId}`, { signal: controller.signal });
+    const reader = createEventReader(events);
     async function invoke(command, args) {
-        const r = await fetch(base + '/__tt/invoke', {
-            method: 'POST', headers: h({ cookie, 'content-type': 'application/json', 'x-tt-csrf': session.csrfToken }),
+        const r = await client.request('/__tt/invoke', {
+            method: 'POST', headers: { 'content-type': 'application/json', 'x-tt-csrf': session.csrfToken },
             body: JSON.stringify({ sessionId: session.sessionId, command, args }),
         });
         const v = await r.json();
         if (!r.ok) throw Object.assign(new Error(`${command}: ${JSON.stringify(v)}`), { status: r.status });
         return v;
     }
-    return { session, nextFrame, invoke, close: async () => {
-        const response = await fetch(base + '/__tt/session/close', {
-            method: 'POST', headers: h({ cookie, 'content-type': 'application/json', 'x-tt-csrf': session.csrfToken }),
+    return { session, nextFrame: reader.nextFrame, invoke, close: async () => {
+        const response = await client.request('/__tt/session/close', {
+            method: 'POST', headers: { 'content-type': 'application/json', 'x-tt-csrf': session.csrfToken },
             body: JSON.stringify({ sessionId: session.sessionId }),
         });
         check(response.status === 204, 'page close must confirm cleanup');
         controller.abort();
+        await reader.cancel().catch(() => {});
     } };
 }
 
 const page = await openPage();
-check((await page.nextFrame()).type === 'ready', 'first frame must be ready');
+const ready = await page.nextFrame();
+check(ready.type === 'ready' && ready.sessionId === page.session.sessionId, 'first frame must confirm this page');
 
 const definition = {
     extensionId: 'probe', name: 'push', description: 'Server push probe',
@@ -67,7 +58,8 @@ check(reused, 'reusing a page channel id must conflict');
 
 // Another page cannot resolve or disable this page's tool.
 const other = await openPage();
-await other.nextFrame();
+const otherReady = await other.nextFrame();
+check(otherReady.type === 'ready' && otherReady.sessionId === other.session.sessionId, 'second page must receive matching ready');
 const toolId = JSON.parse(listed).tools?.find?.(t => JSON.stringify(t).includes('probe'))?.id
     ?? (listed.match(/"(extension[^"]*probe[^"]*)"/)?.[1]);
 const foreignDisable = await other.invoke('set_agent_extension_tool_enabled', { dto: { toolId, enabled: false } })

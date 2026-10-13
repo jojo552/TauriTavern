@@ -1,6 +1,7 @@
 //! Native browser host: no Tauri, WebView, display server or parallel business backend.
 mod ai;
 mod ai_jobs;
+mod auth;
 mod backend_errors;
 mod commands;
 mod downloads;
@@ -63,7 +64,7 @@ struct Options {
     public_origin: url::Url,
     #[arg(long, default_value = "tt")]
     username: String,
-    /// Private UTF-8 file containing a high-entropy HTTP Basic password, not a CLI secret.
+    /// Private UTF-8 file containing a high-entropy login password, not a CLI secret.
     #[arg(long)]
     password_file: PathBuf,
     /// Trusted operator approval of user-configured upstream endpoints. Never exposed to JS.

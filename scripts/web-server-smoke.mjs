@@ -5,19 +5,15 @@
 //        TT_CHAT_TARGET=<characterId>/<fileName> to pin the chat used for the read benchmark.
 // The script is read-only for user data: the settings commit is aborted, never finished.
 
+import { createEventReader, createWebServerClient } from './web-server-client.mjs';
+
 const [base] = process.argv.slice(2);
 if (!base) throw new Error('usage: web-server-smoke.mjs <base url>');
-const origin = base;
 const user = process.env.TT_USER ?? 'tt';
 const password = process.env.TT_PASSWORD;
 if (!password) throw new Error('TT_PASSWORD is required');
-const auth = 'Basic ' + Buffer.from(`${user}:${password}`).toString('base64');
-const host = new URL(origin).host;
-let cookie = '';
-
-function headers(extra = {}) {
-    return { authorization: auth, host, origin, 'sec-fetch-site': 'same-origin', ...(cookie ? { cookie } : {}), ...extra };
-}
+const publicOrigin = process.env.TT_PUBLIC_ORIGIN ?? new URL(base).origin;
+const client = createWebServerClient(base, { publicOrigin });
 
 function check(condition, message) {
     if (!condition) throw new Error(message);
@@ -38,43 +34,43 @@ function mib(bytes) {
 }
 
 async function main() {
-    const unauth = await fetch(base + '/', { headers: { host } });
-    check(unauth.status === 401, `unauthenticated index must be 401, got ${unauth.status}`);
+    const unauth = await client.request('/', { headers: { 'sec-fetch-dest': 'document' } });
+    check(unauth.status === 303 && unauth.headers.get('location') === '/login', 'unauthenticated index must redirect to login');
+    await client.login(user, password);
 
-    const index = await timed('GET / (index.html)', () => fetch(base + '/', { headers: headers() }));
+    const index = await timed('GET / (index.html)', () => client.request('/'));
     const indexText = await index.text();
     check(indexText.includes("platform: 'browser', kind: 'web'"), 'index must declare the browser host identity');
     check(indexText.indexOf('__TAURITAVERN_HOST__') < indexText.indexOf('init.js'), 'host identity must precede application modules');
     console.log(`  index: ${mib(indexText.length)} MiB`);
 
-    const sessionResponse = await fetch(base + '/__tt/session', { headers: headers() });
+    const sessionResponse = await client.request('/__tt/session');
     check(sessionResponse.ok, `session failed ${sessionResponse.status}`);
-    cookie = sessionResponse.headers.get('set-cookie').split(';')[0];
     const session = await sessionResponse.json();
     check(/^[0-9a-f]{64}$/.test(session.sessionId) && /^[0-9a-f]{64}$/.test(session.csrfToken), 'session must return two independent tokens');
 
-    const evilOrigin = await fetch(base + '/__tt/session', { headers: headers({ origin: 'https://evil.example' }) });
+    const evilOrigin = await client.request('/__tt/session', { headers: { origin: 'https://evil.example' } });
     check(evilOrigin.status === 403, `cross-origin session must be 403, got ${evilOrigin.status}`);
 
-    const events = await fetch(`${base}/__tt/events?sessionId=${session.sessionId}`, {
-        headers: headers({ accept: 'text/event-stream' }),
+    const events = await client.request(`/__tt/events?sessionId=${session.sessionId}`, {
+        headers: { accept: 'text/event-stream' }, signal: null,
     });
     check(events.ok, `events failed ${events.status}`);
-    let reader = events.body.getReader();
-    const readyText = new TextDecoder().decode((await reader.read()).value);
-    check(readyText.includes('"type":"ready"') && readyText.includes(session.sessionId), `first SSE frame must be ready: ${readyText}`);
+    let reader = createEventReader(events);
+    const ready = await reader.nextFrame();
+    check(ready.type === 'ready' && ready.sessionId === session.sessionId, 'first SSE frame must match this page');
 
-    const secondStream = await fetch(`${base}/__tt/events?sessionId=${session.sessionId}`, {
-        headers: headers({ accept: 'text/event-stream' }),
+    const secondStream = await client.request(`/__tt/events?sessionId=${session.sessionId}`, {
+        headers: { accept: 'text/event-stream' }, signal: null,
     });
     check(secondStream.ok, `a replacement page stream must resume, got ${secondStream.status}`);
     await reader.cancel();
-    reader = secondStream.body.getReader();
-    const resumedReady = new TextDecoder().decode((await reader.read()).value);
-    check(resumedReady.includes('"type":"ready"'), 'replacement stream must begin with ready');
+    reader = createEventReader(secondStream);
+    const resumedReady = await reader.nextFrame();
+    check(resumedReady.type === 'ready' && resumedReady.sessionId === session.sessionId, 'replacement stream must confirm this page');
 
     async function invoke(command, args = {}, options = {}) {
-        const requestHeaders = headers({ 'x-tt-csrf': session.csrfToken });
+        const requestHeaders = { 'x-tt-csrf': session.csrfToken };
         let body;
         if (options.raw) {
             requestHeaders['content-type'] = 'application/octet-stream';
@@ -86,7 +82,7 @@ async function main() {
             requestHeaders['content-type'] = 'application/json';
             body = JSON.stringify({ sessionId: session.sessionId, command, args });
         }
-        const response = await fetch(base + '/__tt/invoke', { method: 'POST', headers: requestHeaders, body });
+        const response = await client.request('/__tt/invoke', { method: 'POST', headers: requestHeaders, body });
         const type = (response.headers.get('content-type') ?? '').split(';')[0];
         const value = type === 'application/octet-stream'
             ? new Uint8Array(await response.arrayBuffer())
@@ -95,16 +91,16 @@ async function main() {
         return value;
     }
 
-    const noCsrf = await fetch(base + '/__tt/invoke', {
+    const noCsrf = await client.request('/__tt/invoke', {
         method: 'POST',
-        headers: headers({ 'content-type': 'application/json' }),
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sessionId: session.sessionId, command: 'is_ready', args: {} }),
     });
     check(noCsrf.status === 403, `invoke without CSRF must be 403, got ${noCsrf.status}`);
 
-    const foreignSession = await fetch(base + '/__tt/invoke', {
+    const foreignSession = await client.request('/__tt/invoke', {
         method: 'POST',
-        headers: headers({ 'content-type': 'application/json', 'x-tt-csrf': session.csrfToken }),
+        headers: { 'content-type': 'application/json', 'x-tt-csrf': session.csrfToken },
         body: JSON.stringify({ sessionId: 'f'.repeat(64), command: 'is_ready', args: {} }),
     });
     check(foreignSession.status === 403, `unknown session must be 403, got ${foreignSession.status}`);
@@ -138,7 +134,7 @@ async function main() {
     }
 
     await checkCommitOwnership(invoke);
-    await checkSessionIsolation(base, host, session, reader);
+    await checkSessionIsolation();
 
     const unsupported = await invoke('install_extension', { url: 'https://example.invalid/x' }).then(() => null, error => error);
     check(unsupported && unsupported.status === 400, 'browser-unsupported commands must fail explicitly');
@@ -217,36 +213,47 @@ async function checkCommitOwnership(invoke) {
     console.log('  settings commit: ownership, frame transport and single use verified (aborted, nothing published)');
 }
 
-async function checkSessionIsolation(base, host, ownerSession, ownerReader) {
-    const other = await fetch(base + '/__tt/session', { headers: { authorization: auth, host, origin, 'sec-fetch-site': 'same-origin' } });
+async function checkSessionIsolation() {
+    // A separate login owns its own browser Cookie. Do not replace the main client's jar with
+    // the session response: login supplies both auth and browser ownership before page creation.
+    const otherClient = createWebServerClient(base, { publicOrigin });
+    await otherClient.login(user, password);
+    const other = await otherClient.request('/__tt/session');
     check(other.ok, 'second session failed');
-    const otherCookie = other.headers.get('set-cookie').split(';')[0];
     const otherSession = await other.json();
-
-    const ownerCookie = cookie;
-    cookie = otherCookie;
-    const rid = await invokeRaw(otherSession, 'open_chat_reader', null, {
-        'content-type': 'application/json',
-        body: JSON.stringify({ sessionId: otherSession.sessionId, command: 'open_chat_reader', args: {
-            target: { kind: 'character', characterId: 'nonexistent-character', fileName: 'nonexistent' }, allowNotFound: true,
-        } }),
-    });
-    check(rid === null, 'a missing chat with allowNotFound must return null, not an error');
-    const unknownReader = await invokeRaw(otherSession, 'read_bytes', null, {
-        'content-type': 'application/json',
-        body: JSON.stringify({ sessionId: otherSession.sessionId, command: 'read_bytes', args: { rid: 1 } }),
-    }).then(() => false, error => error.status === 400);
-    check(unknownReader, 'reading a resource id from another page must fail');
-    cookie = ownerCookie;
-    void ownerSession;
-    void ownerReader;
+    const events = await otherClient.request(`/__tt/events?sessionId=${otherSession.sessionId}`, { signal: null });
+    check(events.ok, 'second page stream failed');
+    const reader = createEventReader(events);
+    try {
+        const ready = await reader.nextFrame();
+        check(ready.type === 'ready' && ready.sessionId === otherSession.sessionId, 'second page must receive ready');
+        const rid = await invokeRaw(otherClient, otherSession, 'open_chat_reader', {
+            'content-type': 'application/json',
+            body: JSON.stringify({ sessionId: otherSession.sessionId, command: 'open_chat_reader', args: {
+                target: { kind: 'character', characterId: 'nonexistent-character', fileName: 'nonexistent' }, allowNotFound: true,
+            } }),
+        });
+        check(rid === null, 'a missing chat with allowNotFound must return null, not an error');
+        const unknownReader = await invokeRaw(otherClient, otherSession, 'read_bytes', {
+            'content-type': 'application/json',
+            body: JSON.stringify({ sessionId: otherSession.sessionId, command: 'read_bytes', args: { rid: 1 } }),
+        }).then(() => false, error => error.status === 400);
+        check(unknownReader, 'reading a resource id from another page must fail');
+    } finally {
+        await reader.cancel();
+        const closed = await otherClient.request('/__tt/session/close', {
+            method: 'POST', headers: { 'content-type': 'application/json', 'x-tt-csrf': otherSession.csrfToken },
+            body: JSON.stringify({ sessionId: otherSession.sessionId }),
+        });
+        check(closed.status === 204, 'second page close failed');
+    }
     console.log('  session isolation: reader and commit ids are not shared between pages');
 }
 
-async function invokeRaw(session, label, _unused, { 'content-type': contentType, body }) {
-    const response = await fetch(base + '/__tt/invoke', {
+async function invokeRaw(client, session, label, { 'content-type': contentType, body }) {
+    const response = await client.request('/__tt/invoke', {
         method: 'POST',
-        headers: headers({ 'content-type': contentType, 'x-tt-csrf': session.csrfToken }),
+        headers: { 'content-type': contentType, 'x-tt-csrf': session.csrfToken },
         body,
     });
     const value = await response.json();

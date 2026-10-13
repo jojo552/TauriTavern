@@ -162,6 +162,7 @@ function webHarness() {
         unschedule: id => timers.delete(id),
         onError: error => { errors.push(error); nextError?.resolve(error); },
         fetch: async (url, init) => {
+            if (url === '/__tt/auth/status') return Response.json({ authenticated: true });
             if (url === '/__tt/session') {
                 sessions++;
                 return Response.json({ sessionId: `page-${sessions}`, csrfToken: `csrf-${sessions}` });
@@ -211,9 +212,10 @@ test('browser backend errors replay on a short disconnect and declare readiness 
         await installed;
         first.frame({ type: 'event', event: 'tauritavern-backend-error', id: 1, payload: { message: 'first' } }, '0');
 
+        const reconnecting = h.expectSource();
         first.onerror();
         h.runNextTimer();
-        const resumed = h.streams.at(-1);
+        const resumed = await reconnecting;
         assert.match(resumed.url, /sessionId=page-1&after=0/);
         resumed.frame({ type: 'ready', sessionId: 'page-1' });
         resumed.frame({ type: 'event', event: 'tauritavern-backend-error', id: 1, payload: { message: 'duplicate' } }, '0');

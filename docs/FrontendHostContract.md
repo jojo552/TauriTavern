@@ -54,6 +54,8 @@
 
 ### 2.3 浏览器连接与普通生成恢复（Project）
 
+浏览器宿主通过独立 `/login` 页面和同源 JSON 登录接口取得 HttpOnly 认证 Cookie，不再使用 HTTP Basic 弹窗或 Header fallback。未登录文档导航进入登录页；API/静态/下载拒绝访问而不返回登录 HTML。认证失效与页面 session reset 是不同事实：前者终止旧 transport，经独立登录入口处理，后者可重建声明式页面状态。已有页面认证失效时不自动导航丢失未保存内容；登录不会自动重放旧请求或恢复旧句柄。账号仍由宿主 CLI 单用户配置，原生宿主与上游账户兼容 API 不受影响。详细安全/退出/生命周期协议见 [BrowserHost §2](CurrentState/BrowserHost.md#2-认证页面-session-与-csrf)。
+
 浏览器 transport 的明确网络失败共用退避恢复，认证/协议/业务失败不静默降级。`waitUntilWebConnected({signal})` 仅等待匹配的新 ready，取消只撤销等待者；`recoverWebConnection()` 仅唤醒唯一连接路径，均不重放 invoke。网络错误和页面 session 重置使用不同结构化错误；保存、模型 start、工具和未知副作用不自动重试。完整协议和边界见 [BrowserHost §3](CurrentState/BrowserHost.md#3-http-bytes-sse-与-channel)。
 
 可恢复普通生成以原响应进入共同解析/完成管线，重新打开不会重入 Generate 的前置命令或提示词链。恢复不重发历史 token 事件、不自动调用工具/续写/auto-swipe；首次未保存的回复保留既有终态消息事件与保存顺序，已从盘读到 job 完成标记的回复不重复应用。未承诺扩展事件跨崩溃 exactly-once，也不改变 Agent/native 生命周期或新增公开插件 ABI。

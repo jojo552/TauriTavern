@@ -1,8 +1,8 @@
 //! HTTP surface of the browser host: authentication, sessions, invoke, events and resources.
 //!
-//! Every route is behind HTTP Basic authentication. Invoke and event routes additionally require
-//! a page session bound to the browser cookie, and every state-changing request needs the
-//! session CSRF token. Command semantics come from the shared services; this module only maps
+//! Private routes require Cookie authentication. Invoke and event routes additionally require
+//! a page session bound to that authentication and browser identity; state-changing page requests
+//! need the session CSRF token. Command semantics come from the shared services; this module only maps
 //! the browser transport onto them.
 
 use std::convert::Infallible;
@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
-use axum::extract::{Query, Request, State};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{DefaultBodyLimit, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, Sse};
@@ -50,6 +51,7 @@ use tt_runtime::CoreServices;
 
 use crate::ai::AiSession;
 use crate::ai_jobs::BrowserAiJobs;
+use crate::auth::{LoginError, random_token};
 use crate::error::CommandError;
 use crate::events::{PageBus, PageChannel, PageStream, ResumeError};
 use crate::files::HostFiles;
@@ -103,6 +105,11 @@ pub struct PageState {
 
 pub fn router(host: Arc<Host>) -> Router {
     Router::new()
+        .route("/login", get(login_page))
+        .route("/logout", get(logout_page))
+        .route("/__tt/auth/status", get(auth_status))
+        .route("/__tt/auth/login", post(login).layer(DefaultBodyLimit::max(8 * 1024)))
+        .route("/__tt/auth/logout", post(logout).layer(DefaultBodyLimit::max(4 * 1024)))
         .route("/__tt/session", get(create_session))
         .route("/__tt/session/close", post(close_page))
         .route("/__tt/events", get(events))
@@ -144,30 +151,218 @@ fn invoke_decompression() -> RequestDecompressionLayer {
         .no_zstd()
 }
 
+fn public_auth_route(method: &Method, path: &str) -> bool {
+    matches!(
+        (method, path),
+        (&Method::GET, "/login" | "/logout" | "/__tt/auth/status")
+            | (&Method::POST, "/__tt/auth/login" | "/__tt/auth/logout")
+    )
+}
+
+fn document_navigation(request: &Request) -> bool {
+    if request.method() != Method::GET {
+        return false;
+    }
+    let path = request.uri().path();
+    if matches!(path, "/" | "/index.html") {
+        return true;
+    }
+    // API/download/static resource requests must remain machine-readable, even with HTML Accept.
+    // Additional top-level document entries may explicitly identify navigation; not asset paths.
+    !path.starts_with("/__tt/")
+        && !path.starts_with("/api/")
+        && !path.contains('.')
+        && !path.trim_matches('/').contains('/')
+        && request
+            .headers()
+            .get("sec-fetch-dest")
+            .is_some_and(|v| v == "document")
+        && request
+            .headers()
+            .get("sec-fetch-mode")
+            .is_some_and(|v| v == "navigate")
+}
+
+fn auth_error(status: StatusCode, message: &str) -> Response {
+    let mut response = (status, Json(json!({ "error": message }))).into_response();
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if status == StatusCode::UNAUTHORIZED {
+        response.headers_mut().insert("x-tt-login-required", HeaderValue::from_static("1"));
+    }
+    response
+}
+
+fn login_required(request: &Request) -> Response {
+    if document_navigation(request) {
+        let mut response = StatusCode::SEE_OTHER.into_response();
+        response.headers_mut().insert(header::LOCATION, HeaderValue::from_static("/login"));
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        );
+        response
+    } else {
+        auth_error(StatusCode::UNAUTHORIZED, "请先登录后再继续操作。")
+    }
+}
+
+fn cleanup_pages(host: &Arc<Host>, pages: Vec<Arc<Session>>) {
+    if pages.is_empty() {
+        return;
+    }
+    let host = host.clone();
+    tokio::spawn(async move {
+        for session in pages {
+            close_session(&host, session).await;
+        }
+    });
+}
+
 async fn authenticate(State(host): State<Arc<Host>>, request: Request, next: Next) -> Response {
-    match host.security.authenticate(request.headers()) {
-        Ok(()) => {
-            let mut response = next.run(request).await;
-            let headers = response.headers_mut();
-            headers.insert(
-                "x-content-type-options",
-                HeaderValue::from_static("nosniff"),
+    // The exact deployment authority is checked even for login/status/logout and wrong methods.
+    if let Err(status) = host.security.check_host(request.headers()) {
+        return auth_error(status, "请求的服务器地址不正确。");
+    }
+    cleanup_pages(&host, host.security.expired_sessions());
+    let public = public_auth_route(request.method(), request.uri().path());
+    let authentication = if public {
+        None
+    } else {
+        match host.security.authenticate(request.headers()) {
+            Ok(authentication) => Some(authentication),
+            Err(_) => return login_required(&request),
+        }
+    };
+    let mut response = next.run(request).await;
+    // Admission is checked again inside Security. This final check also prevents a raced logout
+    // from returning an authorized private body after its authentication lease was revoked.
+    if authentication.is_some_and(|lease| !lease.active_at(std::time::Instant::now())) {
+        response = auth_error(StatusCode::UNAUTHORIZED, "登录已失效，请重新登录。");
+    }
+    let headers = response.headers_mut();
+    if public {
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    headers.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    headers.insert("referrer-policy", HeaderValue::from_static("same-origin"));
+    headers.insert("x-frame-options", HeaderValue::from_static("SAMEORIGIN"));
+    response
+}
+
+fn auth_page(mode: &str) -> Response {
+    let nonce = random_token();
+    let html = include_str!("login.html")
+        .replace("__MODE__", mode)
+        .replace("__NONCE__", &nonce);
+    let mut response = (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        html,
+    )
+        .into_response();
+    let policy = format!(
+        "default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    );
+    response.headers_mut().insert(
+        "content-security-policy",
+        HeaderValue::from_str(&policy).expect("controlled CSP"),
+    );
+    response
+}
+
+async fn login_page() -> Response {
+    auth_page("login")
+}
+
+async fn logout_page() -> Response {
+    auth_page("logout")
+}
+
+async fn auth_status(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
+    if let Err(error) = host.security.auth_origin(&headers, false) {
+        return error.into_response();
+    }
+    let mut response = Json(json!({ "authenticated": host.security.authenticate(&headers).is_ok() })).into_response();
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginCredentials {
+    username: String,
+    password: String,
+}
+
+async fn login(
+    State(host): State<Arc<Host>>,
+    headers: HeaderMap,
+    body: Result<Json<LoginCredentials>, JsonRejection>,
+) -> Response {
+    if let Err(error) = host.security.auth_origin(&headers, true) {
+        return error.into_response();
+    }
+    let Json(credentials) = match body {
+        Ok(body) => body,
+        Err(error) => return auth_error(error.status(), "登录请求格式不正确或内容过大。"),
+    };
+    match host
+        .security
+        .login(&headers, &credentials.username, &credentials.password)
+    {
+        Ok(result) => {
+            cleanup_pages(&host, result.closed_pages);
+            let mut response = Json(json!({ "ok": true })).into_response();
+            for cookie in result.cookies {
+                response.headers_mut().append(
+                    header::SET_COOKIE,
+                    HeaderValue::from_str(&cookie).expect("controlled cookie"),
+                );
+            }
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
             );
-            headers.insert("referrer-policy", HeaderValue::from_static("same-origin"));
-            headers.insert("x-frame-options", HeaderValue::from_static("SAMEORIGIN"));
             response
         }
-        Err(StatusCode::UNAUTHORIZED) => (
-            StatusCode::UNAUTHORIZED,
-            [(
-                header::WWW_AUTHENTICATE,
-                "Basic realm=\"TauriTavern\", charset=\"UTF-8\"",
-            )],
-            "Authentication required",
-        )
-            .into_response(),
-        Err(status) => status.into_response(),
+        Err(LoginError::Credentials) => auth_error(StatusCode::UNAUTHORIZED, "用户名或密码不正确。"),
+        Err(LoginError::RateLimited) => {
+            let mut response = auth_error(StatusCode::TOO_MANY_REQUESTS, "登录尝试过于频繁，请一分钟后再试。");
+            response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+            response
+        }
+        Err(LoginError::Capacity) => auth_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "登录数量已达上限，请先退出其他浏览器。",
+        ),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogoutRequest {}
+
+async fn logout(
+    State(host): State<Arc<Host>>,
+    headers: HeaderMap,
+    body: Result<Json<LogoutRequest>, JsonRejection>,
+) -> Response {
+    if let Err(error) = host.security.auth_origin(&headers, true) {
+        return error.into_response();
+    }
+    if let Err(error) = body {
+        return auth_error(error.status(), "退出请求格式不正确或内容过大。");
+    }
+    cleanup_pages(&host, host.security.logout(&headers));
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&host.security.clear_auth_cookie()).expect("controlled cookie"),
+    );
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// Serves a one-shot host-built file to the browser that requested it.
@@ -185,7 +380,7 @@ async fn download(
 
 async fn create_session(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
     match host.security.create_session(&headers) {
-        Ok((session, cookie)) => {
+        Ok(session) => {
             host.backend_errors
                 .register_page(&session.id, &session.page.bus);
             let mut response =
@@ -193,12 +388,6 @@ async fn create_session(State(host): State<Arc<Host>>, headers: HeaderMap) -> Re
             response
                 .headers_mut()
                 .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            if let Some(cookie) = cookie {
-                response.headers_mut().insert(
-                    header::SET_COOKIE,
-                    HeaderValue::from_str(&cookie).expect("controlled cookie"),
-                );
-            }
             response
         }
         Err(error) => error.into_response(),
@@ -331,43 +520,57 @@ fn page_stream(
     let period = Duration::from_secs(20);
     let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let frames = futures_util::stream::unfold(Some((stream, heartbeat)), move |state| {
+    let frames = futures_util::stream::unfold(Some((stream, heartbeat, Some(ready))), move |state| {
         let host = host.clone();
         let session = session.clone();
         async move {
-            let (mut stream, mut heartbeat) = state?;
-            tokio::select! {
-                // PageStream::next is cancellation-safe: it advances only when returning a frame.
-                // Prefer terminal/page data over heartbeat if both are ready.
-                biased;
-                frame = stream.next() => match frame {
-                    Ok(Some((id, frame))) => Some((
-                        Ok(Event::default().id(id.to_string()).data(frame)),
-                        Some((stream, heartbeat)),
-                    )),
-                    Err(ResumeError::Gap) => {
-                        terminate_page(host, session);
-                        Some((Ok(session_reset(ResetReason::Gap)), None))
-                    }
-                    Ok(None) | Err(ResumeError::Closed) => None,
-                },
-                _ = heartbeat.tick() => Some((
-                    // Observable control traffic, never retained by PageBus or assigned an id.
-                    Ok(Event::default().data(json!({
-                        "type": "heartbeat", "sessionId": session.id,
-                    }).to_string())),
-                    Some((stream, heartbeat)),
-                )),
+            let (mut stream, mut heartbeat, ready) = state?;
+            if !session.active_at(std::time::Instant::now()) {
+                cleanup_pages(&host, host.security.expired_sessions());
+                return None;
             }
+            let event = if let Some(ready) = ready {
+                ready
+            } else {
+                let closed = session.page.bus.closed();
+                tokio::select! {
+                    biased;
+                    _ = session.authentication.revoked.cancelled() => return None,
+                    _ = tokio::time::sleep_until(tokio::time::Instant::from_std(session.authentication.expires_at)) => {
+                        cleanup_pages(&host, host.security.expired_sessions());
+                        return None;
+                    }
+                    _ = closed.cancelled() => return None,
+                    // PageStream::next advances only when it returns a frame.
+                    frame = stream.next() => match frame {
+                        Ok(Some((id, frame))) => Event::default().id(id.to_string()).data(frame),
+                        Err(ResumeError::Gap) => {
+                            let authentication = session.authentication.clone();
+                            terminate_page(host.clone(), session.clone());
+                            return authentication.active_at(std::time::Instant::now())
+                                .then(|| (Ok(session_reset(ResetReason::Gap)), None));
+                        }
+                        Ok(None) | Err(ResumeError::Closed) => return None,
+                    },
+                    _ = heartbeat.tick() => Event::default().data(json!({
+                        "type": "heartbeat", "sessionId": session.id,
+                    }).to_string()),
+                }
+            };
+            // Recheck immediately before yielding ready, page data or heartbeat. A cancellation
+            // can race a ready data branch, and authentication expiry is independent of page grace.
+            if !session.active_at(std::time::Instant::now()) {
+                cleanup_pages(&host, host.security.expired_sessions());
+                return None;
+            }
+            Some((Ok(event), Some((stream, heartbeat, None))))
         }
     });
-    // The atomic claim's guard lives as long as the browser keeps this connection open.
-    futures_util::stream::once(async move { Ok(ready) })
-        .chain(frames)
-        .map(move |event| {
-            let _ = &guard;
-            event
-        })
+    // The claim's guard lives exactly as long as the SSE body, including blocked/cancelled reads.
+    frames.map(move |event| {
+        let _ = &guard;
+        event
+    })
 }
 
 use futures_util::StreamExt;
@@ -892,6 +1095,57 @@ mod tests {
             events_cursor(&headers, Some(0)),
             Err(CommandError::BadRequest(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn anonymous_documents_redirect_but_resources_and_apis_return_login_json() {
+        for path in ["/", "/index.html"] {
+            let request = Request::builder().uri(path).body(Body::empty()).unwrap();
+            let response = login_required(&request);
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            assert_eq!(response.headers()[header::LOCATION], "/login");
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+        }
+        for path in ["/__tt/events", "/__tt/invoke", "/__tt/download/token", "/web/transport.js", "/images/avatar.png"] {
+            let request = Request::builder()
+                .uri(path)
+                .header(header::ACCEPT, "text/html")
+                .header("sec-fetch-dest", "document")
+                .header("sec-fetch-mode", "navigate")
+                .body(Body::empty())
+                .unwrap();
+            let response = login_required(&request);
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(response.headers()["x-tt-login-required"], "1");
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+            assert!(!response.headers().contains_key(header::LOCATION));
+            let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+            let value: Value = serde_json::from_slice(&body).unwrap();
+            assert!(value["error"].as_str().is_some_and(|message| !message.is_empty()));
+        }
+    }
+
+    #[tokio::test]
+    async fn login_and_logout_documents_use_fresh_shared_nonce_policies_without_cookies() {
+        let mut nonces = Vec::new();
+        for mode in ["login", "logout"] {
+            let response = auth_page(mode);
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert!(!response.headers().contains_key(header::SET_COOKIE));
+            let policy = response.headers()["content-security-policy"].to_str().unwrap().to_owned();
+            let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+            let html = std::str::from_utf8(&body).unwrap();
+            let nonce = html.split("nonce=\"").nth(1).unwrap().split('"').next().unwrap();
+            assert_eq!(html.matches(&format!("nonce=\"{nonce}\"")).count(), 2);
+            assert!(policy.contains(&format!("script-src 'nonce-{nonce}'")));
+            assert!(policy.contains(&format!("style-src 'nonce-{nonce}'")));
+            assert!(html.contains(&format!("data-mode=\"{mode}\"")));
+            nonces.push(nonce.to_owned());
+        }
+        assert_ne!(nonces[0], nonces[1]);
     }
 
     #[tokio::test]
