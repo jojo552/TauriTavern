@@ -1241,10 +1241,16 @@ body .panelControlBar {
 }
 
 @supports (content-visibility: auto) and (contain-intrinsic-block-size: auto 200px) {
+    /* Every message records its rendered size, including the tail. When a new message
+       arrives the old tail starts skipping with its real height rather than 200px;
+       an estimate there would clamp the scroll position and flash earlier floors. */
+    #chat > .mes {
+        contain-intrinsic-block-size: auto 200px;
+    }
+
     /* Keep the actively updating last message on the normal rendering path. */
     #chat > .mes:not(.last_mes) {
         content-visibility: auto;
-        contain-intrinsic-block-size: auto 200px;
         flex-shrink: 0;
     }
 }
