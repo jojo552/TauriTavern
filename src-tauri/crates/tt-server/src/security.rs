@@ -36,7 +36,6 @@ struct Registry {
 }
 
 pub struct LoginResult {
-    pub authentication: Arc<Authentication>,
     pub cookies: [String; 2],
     pub closed_pages: Vec<Arc<Session>>,
 }
@@ -203,7 +202,6 @@ impl Security {
             self.cookie(COOKIE, &authentication.browser, BROWSER_LIFETIME.as_secs()),
         ];
         Ok(LoginResult {
-            authentication,
             cookies,
             closed_pages,
         })
@@ -424,22 +422,29 @@ pub fn browser_cookie(headers: &HeaderMap) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Requests carry exactly the issued Set-Cookie values, as a browser would.
+    fn cookie_headers(login: &LoginResult) -> HeaderMap {
+        let cookies = login
+            .cookies
+            .iter()
+            .map(|cookie| cookie.split(';').next().unwrap())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "tt.example".parse().unwrap());
+        headers.insert("cookie", cookies.parse().unwrap());
+        headers
+    }
+
+    fn authentication(security: &Security, login: &LoginResult) -> Arc<Authentication> {
+        security.authenticate(&cookie_headers(login)).unwrap()
+    }
+
     fn login_headers(security: &Security) -> HeaderMap {
         let login = security
             .login(&HeaderMap::new(), "tt", "a-long-password-for-tests-only")
             .unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert("host", "tt.example".parse().unwrap());
-        headers.insert(
-            "cookie",
-            format!(
-                "{COOKIE}={}; {AUTH_COOKIE}={}",
-                login.authentication.browser, login.authentication.id
-            )
-            .parse()
-            .unwrap(),
-        );
-        headers
+        cookie_headers(&login)
     }
 
     fn security() -> Security {
@@ -670,7 +675,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            login.authentication.expires_at,
+            authentication(&security, &login).expires_at,
             now + Duration::from_secs(60) + AUTH_LIFETIME
         );
         for cookie in &login.cookies {
@@ -724,19 +729,11 @@ mod tests {
         let login = security
             .login(&headers, "tt", "a-long-password-for-tests-only")
             .unwrap();
-        assert_eq!(login.authentication.browser, first.browser);
-        assert_ne!(login.authentication.id, first.authentication.id);
+        let renewed = authentication(&security, &login);
+        assert_eq!(renewed.browser, first.browser);
+        assert_ne!(renewed.id, first.authentication.id);
         assert!(!security.clear_auth_cookie().contains(COOKIE));
-        let mut current = headers.clone();
-        current.insert(
-            "cookie",
-            format!(
-                "{COOKIE}={}; {AUTH_COOKIE}={}",
-                login.authentication.browser, login.authentication.id
-            )
-            .parse()
-            .unwrap(),
-        );
+        let current = cookie_headers(&login);
         let page = security.create_session(&current).unwrap();
         let replacement = security
             .login(&current, "tt", "a-long-password-for-tests-only")
@@ -744,7 +741,7 @@ mod tests {
         assert_eq!(replacement.closed_pages.len(), 1);
         assert!(page.page.bus.closed().is_cancelled());
         assert!(page.authentication.revoked.is_cancelled());
-        assert_eq!(replacement.authentication.browser, first.browser);
+        assert_eq!(authentication(&security, &replacement).browser, first.browser);
     }
 
     #[test]

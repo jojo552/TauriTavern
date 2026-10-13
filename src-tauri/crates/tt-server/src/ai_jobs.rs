@@ -630,16 +630,14 @@ mod tests {
             let login = security
                 .login(&HeaderMap::new(), "tt", "a-long-password-for-tests-only")
                 .unwrap();
+            let cookies = login
+                .cookies
+                .iter()
+                .map(|cookie| cookie.split(';').next().unwrap())
+                .collect::<Vec<_>>()
+                .join("; ");
             let mut headers = HeaderMap::new();
-            headers.insert(
-                "cookie",
-                format!(
-                    "tt_browser={}; tt_auth={}",
-                    login.authentication.browser, login.authentication.id
-                )
-                .parse()
-                .unwrap(),
-            );
+            headers.insert("cookie", cookies.parse().unwrap());
             headers
         };
         let headers = authenticated();
