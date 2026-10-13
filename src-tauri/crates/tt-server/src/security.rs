@@ -249,7 +249,11 @@ impl Security {
     }
 
     /// Auth POSTs need an exact Origin even on HTTP/old browsers without Fetch Metadata.
-    pub fn auth_origin(&self, headers: &HeaderMap, require_origin: bool) -> Result<(), CommandError> {
+    pub fn auth_origin(
+        &self,
+        headers: &HeaderMap,
+        require_origin: bool,
+    ) -> Result<(), CommandError> {
         let origin = headers.get("origin").and_then(|value| value.to_str().ok());
         if (require_origin && origin != Some(self.public_origin.as_str()))
             || (headers.contains_key("origin") && origin != Some(self.public_origin.as_str()))
@@ -286,7 +290,9 @@ impl Security {
                 detached_since: now,
             }),
         });
-        registry.sessions.insert(session.id.clone(), session.clone());
+        registry
+            .sessions
+            .insert(session.id.clone(), session.clone());
         Ok(session)
     }
 
@@ -424,7 +430,15 @@ mod tests {
             .unwrap();
         let mut headers = HeaderMap::new();
         headers.insert("host", "tt.example".parse().unwrap());
-        headers.insert("cookie", format!("{COOKIE}={}; {AUTH_COOKIE}={}", login.authentication.browser, login.authentication.id).parse().unwrap());
+        headers.insert(
+            "cookie",
+            format!(
+                "{COOKIE}={}; {AUTH_COOKIE}={}",
+                login.authentication.browser, login.authentication.id
+            )
+            .parse()
+            .unwrap(),
+        );
         headers
     }
 
@@ -455,7 +469,12 @@ mod tests {
         headers.insert("host", "tt.example".parse().unwrap());
         headers.insert(
             "cookie",
-            format!("{COOKIE}={}; {AUTH_COOKIE}={}", session.browser, session.authentication.id).parse().unwrap(),
+            format!(
+                "{COOKIE}={}; {AUTH_COOKIE}={}",
+                session.browser, session.authentication.id
+            )
+            .parse()
+            .unwrap(),
         );
         headers
     }
@@ -593,15 +612,34 @@ mod tests {
         let security = security();
         let mut headers = HeaderMap::new();
         headers.insert("host", "tt.example".parse().unwrap());
-        headers.insert("authorization", "Basic dHQ6YS1sb25nLXBhc3N3b3JkLWZvci10ZXN0cy1vbmx5".parse().unwrap());
-        assert!(matches!(security.authenticate(&headers), Err(StatusCode::UNAUTHORIZED)));
+        headers.insert(
+            "authorization",
+            "Basic dHQ6YS1sb25nLXBhc3N3b3JkLWZvci10ZXN0cy1vbmx5"
+                .parse()
+                .unwrap(),
+        );
+        assert!(matches!(
+            security.authenticate(&headers),
+            Err(StatusCode::UNAUTHORIZED)
+        ));
         let mut headers = login_headers(&security);
         assert!(security.authenticate(&headers).is_ok());
         headers.insert("host", "evil.example".parse().unwrap());
-        assert!(matches!(security.authenticate(&headers), Err(StatusCode::MISDIRECTED_REQUEST)));
+        assert!(matches!(
+            security.authenticate(&headers),
+            Err(StatusCode::MISDIRECTED_REQUEST)
+        ));
         headers.insert("host", "tt.example".parse().unwrap());
-        headers.insert("cookie", "tt_auth=not-a-token; tt_browser=not-a-token".parse().unwrap());
-        assert!(matches!(security.authenticate(&headers), Err(StatusCode::UNAUTHORIZED)));
+        headers.insert(
+            "cookie",
+            "tt_auth=not-a-token; tt_browser=not-a-token"
+                .parse()
+                .unwrap(),
+        );
+        assert!(matches!(
+            security.authenticate(&headers),
+            Err(StatusCode::UNAUTHORIZED)
+        ));
     }
 
     #[test]
@@ -609,11 +647,32 @@ mod tests {
         let security = security();
         let now = Instant::now();
         for _ in 0..16 {
-            assert!(matches!(security.login_at(&HeaderMap::new(), "tt", "wrong", now), Err(LoginError::Credentials)));
+            assert!(matches!(
+                security.login_at(&HeaderMap::new(), "tt", "wrong", now),
+                Err(LoginError::Credentials)
+            ));
         }
-        assert!(matches!(security.login_at(&HeaderMap::new(), "tt", "a-long-password-for-tests-only", now), Err(LoginError::RateLimited)));
-        let login = security.login_at(&HeaderMap::new(), "tt", "a-long-password-for-tests-only", now + Duration::from_secs(60)).unwrap();
-        assert_eq!(login.authentication.expires_at, now + Duration::from_secs(60) + AUTH_LIFETIME);
+        assert!(matches!(
+            security.login_at(
+                &HeaderMap::new(),
+                "tt",
+                "a-long-password-for-tests-only",
+                now
+            ),
+            Err(LoginError::RateLimited)
+        ));
+        let login = security
+            .login_at(
+                &HeaderMap::new(),
+                "tt",
+                "a-long-password-for-tests-only",
+                now + Duration::from_secs(60),
+            )
+            .unwrap();
+        assert_eq!(
+            login.authentication.expires_at,
+            now + Duration::from_secs(60) + AUTH_LIFETIME
+        );
         for cookie in &login.cookies {
             assert!(cookie.contains("HttpOnly; SameSite=Strict"));
             assert!(cookie.ends_with("; Secure"));
@@ -621,9 +680,24 @@ mod tests {
         assert!(login.cookies[0].contains("Max-Age=604800"));
         assert!(login.cookies[1].contains("Max-Age=2592000"));
         for _ in 1..64 {
-            security.login_at(&HeaderMap::new(), "tt", "a-long-password-for-tests-only", now + Duration::from_secs(60)).unwrap();
+            security
+                .login_at(
+                    &HeaderMap::new(),
+                    "tt",
+                    "a-long-password-for-tests-only",
+                    now + Duration::from_secs(60),
+                )
+                .unwrap();
         }
-        assert!(matches!(security.login_at(&HeaderMap::new(), "tt", "a-long-password-for-tests-only", now + Duration::from_secs(60)), Err(LoginError::Capacity)));
+        assert!(matches!(
+            security.login_at(
+                &HeaderMap::new(),
+                "tt",
+                "a-long-password-for-tests-only",
+                now + Duration::from_secs(60)
+            ),
+            Err(LoginError::Capacity)
+        ));
     }
 
     #[test]
@@ -634,7 +708,12 @@ mod tests {
         let second = security.create_session(&headers).unwrap();
         let _stream = attached(security.claim_stream(&headers, &first.id).unwrap());
         let mut logout_headers = headers.clone();
-        logout_headers.insert("cookie", format!("{AUTH_COOKIE}={}", first.authentication.id).parse().unwrap());
+        logout_headers.insert(
+            "cookie",
+            format!("{AUTH_COOKIE}={}", first.authentication.id)
+                .parse()
+                .unwrap(),
+        );
         let closed = security.logout(&logout_headers);
         assert_eq!(closed.len(), 2);
         assert!(first.authentication.revoked.is_cancelled());
@@ -642,14 +721,26 @@ mod tests {
         assert!(second.page.bus.closed().is_cancelled());
         assert!(security.create_session(&headers).is_err());
         assert!(security.claim_stream(&headers, &first.id).is_err());
-        let login = security.login(&headers, "tt", "a-long-password-for-tests-only").unwrap();
+        let login = security
+            .login(&headers, "tt", "a-long-password-for-tests-only")
+            .unwrap();
         assert_eq!(login.authentication.browser, first.browser);
         assert_ne!(login.authentication.id, first.authentication.id);
         assert!(!security.clear_auth_cookie().contains(COOKIE));
         let mut current = headers.clone();
-        current.insert("cookie", format!("{COOKIE}={}; {AUTH_COOKIE}={}", login.authentication.browser, login.authentication.id).parse().unwrap());
+        current.insert(
+            "cookie",
+            format!(
+                "{COOKIE}={}; {AUTH_COOKIE}={}",
+                login.authentication.browser, login.authentication.id
+            )
+            .parse()
+            .unwrap(),
+        );
         let page = security.create_session(&current).unwrap();
-        let replacement = security.login(&current, "tt", "a-long-password-for-tests-only").unwrap();
+        let replacement = security
+            .login(&current, "tt", "a-long-password-for-tests-only")
+            .unwrap();
         assert_eq!(replacement.closed_pages.len(), 1);
         assert!(page.page.bus.closed().is_cancelled());
         assert!(page.authentication.revoked.is_cancelled());
