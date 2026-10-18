@@ -1,7 +1,7 @@
 use super::{args::Args, json, unsupported};
 use crate::error::CommandError;
 use serde_json::Value;
-use tt_application::dto::character_dto::UpdateCharacterCardDataDto;
+use tt_application::dto::character_dto::{AdoptCharacterLorebookDto, UpdateCharacterCardDataDto};
 use tt_runtime::CoreServices;
 
 pub(super) fn handles(command: &str) -> bool {
@@ -14,8 +14,8 @@ pub(super) fn handles(command: &str) -> bool {
             | "update_character_card_data"
             | "merge_character_card_data"
             | "bulk_merge_character_card_data"
-            | "check_character_lorebook_conflict"
-            | "resolve_character_lorebook_conflict"
+            | "adopt_character_lorebook"
+            | "resolve_character_lorebook_adoption"
             | "delete_character"
             | "rename_character"
             | "duplicate_character"
@@ -72,14 +72,13 @@ pub(super) async fn dispatch(
                 .bulk_merge_character_card_data(a.required("dto")?)
                 .await?,
         ),
-        "check_character_lorebook_conflict" => json(
+        "adopt_character_lorebook" => {
+            let dto: AdoptCharacterLorebookDto = a.required("dto")?;
+            json(s.character_service.adopt_character_lorebook(&dto.name).await?)
+        }
+        "resolve_character_lorebook_adoption" => json(
             s.character_service
-                .check_lorebook_conflict(a.required("dto")?)
-                .await?,
-        ),
-        "resolve_character_lorebook_conflict" => json(
-            s.character_service
-                .resolve_lorebook_conflict(a.required("dto")?)
+                .resolve_lorebook_adoption(a.required("dto")?)
                 .await?,
         ),
         "delete_character" => json(

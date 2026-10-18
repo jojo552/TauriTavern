@@ -1,6 +1,97 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBrowserRuntime } from './runtime.mjs';
+import { createBrowserRuntime, createPaginationWaiter } from './runtime.mjs';
+
+test('deleting characters keeps a shared lorebook until its last user is deleted', async context => {
+    const { window, getModule, startHost, initializeChatRendering } = createBrowserRuntime();
+    context.after(() => window.happyDOM.close());
+    await startHost();
+    const main = await initializeChatRendering();
+    const worldInfo = getModule('scripts/world-info.js').namespace;
+    main.setAnimationDuration(0);
+    getModule('scripts/tauri/setting/settings-persistence.js').namespace
+        .captureSettingsSaveState({}, { token: 'loaded' });
+
+    let characters = ['Alice', 'Bob'].map(name => ({
+        name, avatar: `${name}.png`, chat: 'chat', shallow: false,
+        data: { extensions: { world: 'Shared' }, tags: [], creator_notes: '', creator: '' },
+    }));
+    const worlds = new Set(['Shared']);
+    // An empty refresh must not make the surviving character's book appear unused.
+    let listReads = 0;
+    const notices = [];
+    window.toastr.success = message => notices.push(message);
+    window.fetch = async (url, options) => {
+        const body = options?.body ? JSON.parse(options.body) : undefined;
+        switch (url) {
+            case '/api/characters/delete':
+                characters = characters.filter(character => character.avatar !== body.avatar_url);
+                return window.Response.json({ ok: true });
+            case '/api/characters/all':
+                return window.Response.json(++listReads === 1 ? [] : characters);
+            case '/api/groups/all': return window.Response.json([]);
+            case '/api/settings/get': return window.Response.json({ world_names: [...worlds] });
+            case '/api/settings/save': return window.Response.json({ tauritavern_settings_revision: { token: 'saved' } });
+            case '/api/worldinfo/delete':
+                worlds.delete(body.name);
+                return window.Response.json({ ok: true });
+            default: throw new Error(`Unexpected request: ${url}`);
+        }
+    };
+    await worldInfo.updateWorldInfoList();
+    worldInfo.world_info.charLore = [{ name: 'Bob', extraBooks: ['Shared'] }];
+    main.characters.push(...characters);
+    main.setCharacterId(0);
+
+    assert.equal(await main.deleteCharacter('Alice.png', { deleteChats: false }), true);
+    assert.equal(worlds.has('Shared'), true);
+    await main.getCharacters();
+    main.setCharacterId(0);
+    assert.equal(await main.deleteCharacter('Bob.png', { deleteChats: false }), true);
+    assert.equal(worlds.has('Shared'), false);
+    assert.deepEqual(notices, ['Also deleted lorebook "Shared"']);
+});
+
+test('editing after a backend lorebook update preserves the new document', async context => {
+    const { window, getModule, load, startHost } = createBrowserRuntime();
+    context.after(() => window.happyDOM.close());
+    await startHost();
+    await load('script.js');
+    const worldInfo = getModule('scripts/world-info.js').namespace;
+    const $ = window.jQuery;
+    const waitForPagination = createPaginationWaiter(window);
+
+    const entry = (uid, content) => ({ ...structuredClone(worldInfo.newWorldInfoEntryTemplate), uid, content });
+    const oldDocument = { entries: { 0: entry(0, 'old content') } };
+    const newDocument = { entries: { 0: entry(0, 'new content'), 1: entry(1, 'new entry') } };
+    let saved;
+    window.fetch = async (url, init) => {
+        if (url === '/api/settings/get') return new window.Response(JSON.stringify({ world_names: ['Book'] }));
+        if (url === '/api/worldinfo/get') return new window.Response(JSON.stringify(newDocument));
+        if (url === '/api/worldinfo/edit') {
+            saved = JSON.parse(init.body).data;
+            return new window.Response('{}');
+        }
+        throw new Error(`Unexpected request: ${url}`);
+    };
+    await worldInfo.updateWorldInfoList();
+    worldInfo.initWorldInfo();
+    $('#world_editor_select').val('0');
+    worldInfo.worldInfoCache.set('Book', oldDocument);
+    await waitForPagination(() => worldInfo.showWorldEditor('Book'));
+
+    await worldInfo.saveWorldInfo('Book', oldDocument);
+    await waitForPagination(() => worldInfo.refreshWorldInfoAfterExternalWrite('Book'));
+    await worldInfo.flushWorldInfoSaves();
+    assert.equal(saved, undefined);
+    const order = window.document.querySelector('#world_popup_entries_list input[name="order"]');
+    order.value = '101';
+    await $(order).triggerHandler('input');
+    await worldInfo.flushWorldInfoSaves();
+    assert.equal(saved.entries[0].content, 'new content');
+    assert.equal(saved.entries[1].content, 'new entry');
+    assert.equal(saved.entries[0].order, 101);
+});
 
 test('immediate and debounced world info saves keep their snapshots and later edits', async context => {
     const { window, getModule, load, startHost } = createBrowserRuntime();

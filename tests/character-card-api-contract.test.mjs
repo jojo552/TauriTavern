@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { installCharacterCardsApi } from '../src/tauri/main/api/character-cards.js';
+import { installCharacterCardsApi, LorebookAdoptionConflictError } from '../src/tauri/main/api/character-cards.js';
+import { createInvokeService } from '../src/tauri/main/services/invokes/invoke-service.js';
+import { HOSTS, installHostIdentity } from './helpers/host-identity.mjs';
 
 function installHarness({ files, readFile }) {
     const discarded = [];
     globalThis.window = { __TAURITAVERN__: { api: {} } };
     installCharacterCardsApi({
+        invalidateCharacterCache: () => {},
         safeInvoke: async (command, args) => {
             if (command === 'pick_import_files') {
                 return files;
@@ -44,3 +47,45 @@ test('native character selection preserves original names and bytes while releas
     assert.deepEqual(new Uint8Array(await files[1].arrayBuffer()), png);
     assert.deepEqual(discarded, selected.map(file => file.path));
 });
+
+for (const host of [HOSTS.windows, { platform: 'browser', kind: 'web' }]) {
+    test(`${host.kind} character cards expose lorebook adoption and reject stale decisions without repeating writes`, async (t) => {
+        t.after(installHostIdentity(host));
+        const calls = [];
+        let invalidations = 0;
+        const adopted = { status: 'decision', world: 'Library', target: 'Library', can_update: true, token: 'current' };
+        const resolved = { status: 'linked', world: 'Library', previous: '', created: false, updated: true };
+        const { safeInvoke } = createInvokeService({
+            policies: {},
+            invoke: async (command, args) => {
+                calls.push({ command, args });
+                if (command === 'adopt_character_lorebook') return adopted;
+                if (command === 'resolve_character_lorebook_adoption') {
+                    if (args.dto.token === 'stale') throw { Conflict: 'Lorebook decision expired' };
+                    return resolved;
+                }
+                throw new Error(`Unexpected command: ${command}`);
+            },
+        });
+        globalThis.window = { __TAURITAVERN__: { api: {} } };
+        installCharacterCardsApi({
+            safeInvoke,
+            invalidateCharacterCache: () => { invalidations++; },
+            createReadableFileStream: () => { throw new Error('Lorebook adoption must not read a picked file'); },
+        });
+        const cards = window.__TAURITAVERN__.api.characterCards;
+        assert.equal(await cards.adoptLorebook('Alice%20#1.png'), adopted);
+        assert.equal(await cards.resolveLorebookAdoption('Alice%20#1.png', 'update', 'current'), resolved);
+        assert.equal(invalidations, 2);
+        await assert.rejects(
+            cards.resolveLorebookAdoption('Alice%20#1.png', 'adopt', 'stale'),
+            error => error instanceof LorebookAdoptionConflictError && error.message.includes('Lorebook decision expired'),
+        );
+        assert.equal(invalidations, 2, 'a rejected decision cannot publish a successful cache mutation');
+        assert.deepEqual(calls, [
+            { command: 'adopt_character_lorebook', args: { dto: { name: 'Alice%20#1' } } },
+            { command: 'resolve_character_lorebook_adoption', args: { dto: { name: 'Alice%20#1', choice: 'update', token: 'current' } } },
+            { command: 'resolve_character_lorebook_adoption', args: { dto: { name: 'Alice%20#1', choice: 'adopt', token: 'stale' } } },
+        ]);
+    });
+}

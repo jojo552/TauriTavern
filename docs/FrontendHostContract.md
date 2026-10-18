@@ -125,9 +125,13 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
   - `api.layout`：读取与订阅当前内容视口。原生遮挡由原生层先消费；浏览器宿主读取 `visualViewport`（缺少时用 `innerWidth/innerHeight`），不依赖原生窗口快照或背景发布。见 [API/Layout.md](API/Layout.md)。
   - `api.chat`：TauriTavern 独有的聊天/记忆类扩展 API（聊天摘要、元数据、历史分页、稳定存储、后端定位、纯文本检索）。
     - 详细签名与示例见：`docs/API/Chat.md`。
-  - `api.characterCards`：选择本地角色卡（`json/png`），返回标准 `File[]`，交给上游的导入或替换流程。原生宿主使用原生选择器；浏览器在用户激活内调用 DOM 文件输入框。
+  - `api.characterCards`：选择本地角色卡，以及接管卡内的世界书。原生宿主使用原生选择器；浏览器在用户激活内调用 DOM 文件输入框；世界书操作共用同一命令路径。
     - `isNativePickerAvailable()`：所有宿主都为 `true`；名称因兼容保留，在浏览器只表示该选择入口可用，不意味着存在原生插件。
-    - `pickFiles(options?: { multiple?: boolean }) -> Promise<File[] | null>`：支持多选；取消返回 `null`，失败抛错。
+    - `pickFiles(options?: { multiple?: boolean }) -> Promise<File[] | null>`：选择 `json/png` 角色卡，返回标准 `File[]`；支持多选；取消返回 `null`，失败抛错。
+    - Project，第一方使用，参数为头像文件名：
+      - `adoptLorebook(avatar)`：按角色当前的绑定，接管卡内世界书。
+      - `resolveLorebookAdoption(avatar, choice, token)`：提交 `adopt` 或 `update`。决定已过期时，以 `LorebookAdoptionConflictError` 拒绝。
+      - 两个方法都返回 `TauriTavernCharacterLorebookAdoption`（`src/types.d.ts`），失败时拒绝。规则见[角色世界书](CurrentState/CharacterIdentityContract.md#10-角色世界书)。
   - `api.extension.store`：扩展级**全局持久化**（不绑定 chat），提供 KV JSON + Blob，支持多 table 与 Blob 流式读取。
     - 签名、读写边界与示例见 [Extension Store API](API/Extension.md)。
   - `api.db`：本地向量、JSON、文本索引、图和 TQL 数据库。`open` 异步等待可用；NodeId 为整数；签名、索引恢复边界与共享关闭语义见 [Database API](API/Database.md)。
@@ -238,6 +242,10 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
 ### 4.3 路由表（Public）
 
 路由位于 `src/tauri/main/routes/*`；公共契约覆盖上游兼容及生态实际依赖的接口。
+
+`/api/characters/import` 的响应比上游多一个 `lorebook` 字段，形状与 `api.characterCards` 相同。角色已经写入、但世界书接管失败时，`lorebook.status` 为 `failed`，错误由后端提示。
+
+`/api/characters/delete` 只删除角色和请求删除的聊天，不删除世界书。界面删卡时如何清理世界书，见[角色世界书](CurrentState/CharacterIdentityContract.md#10-角色世界书)。
 
 第一方聊天读写直连内部 transport，不产生兼容路由的 Fetch 请求；外部观察应使用既有业务事件。`/api/chats/get`、`/api/chats/group/get`、`/api/chats/save`、`/api/chats/group/save` 仍供扩展调用。保存成功为 `200 { ok: true }`；integrity 冲突按错误码识别，返回 `400 { error: 'integrity' }`。
 

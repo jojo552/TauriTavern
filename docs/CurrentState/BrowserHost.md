@@ -110,6 +110,8 @@ install -d -m 700 "$AUTH_DIR"
 
 [file-transfer.js](../../src/web/file-transfer.js) 在用户激活内打开 DOM 文件输入框，返回标准 `File[]`；取消返回 `null`，失败或中止拒绝 Promise。角色卡、skill 与数据归档选择复用该入口；`api.characterCards.isNativePickerAvailable()` 的旧名称因兼容保留，在浏览器为 `true` 不意味着存在原生 picker。
 
+角色卡 API 在两种宿主始终安装同一组方法，仅选择器因宿主不同；`adoptLorebook()` / `resolveLorebookAdoption()` 共用 invoke、缓存失效与冲突错误规范化。HTTP 命令直接委托共享角色服务，导入/替换返回同一 `{ character, lorebook }`；世界书决定带 token，过期失败不自动重放。接管与删除规则见[角色世界书](CharacterIdentityContract.md#10-角色世界书)，不保留旧 conflict 命令或独立浏览器实现。
+
 浏览器上传不将用户本机磁盘路径直接透传给 Rust。共享上传服务将 `File` / `Blob` 交给 staging：
 
 - `stage_file_begin` 分配 UUID 文件并返回 `file_path` 与块大小；头像、用户头像、世界书导入为 512 KiB，其他 kind 当前为 8 MiB。

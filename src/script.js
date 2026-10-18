@@ -47,7 +47,7 @@ import {
     saveCharacterChatMetadata,
 } from './scripts/chat-payload-transport.js';
 import { getActiveChatSnapshot } from './tauri/main/adapters/st/active-chat-ref.js';
-import { extension_prompt_roles, extension_prompt_types } from './scripts/extension-prompts.js';
+import { composeAuthorsNote, extension_prompt_roles, extension_prompt_types, isWorldInfoInjection } from './scripts/extension-prompts.js';
 import { waitForTauriMainReady } from './scripts/extensions/runtime/tauri-ready.js';
 import {
     ChatInputFocusIntent,
@@ -72,7 +72,7 @@ import {
     subscribeAgentRunState,
 } from './scripts/tauritavern/agent/agent-run-controller.js';
 import { agentErrorMessage } from './scripts/tauritavern/agent/agent-error-presenter.js';
-import { normalizeAgentContextPolicy } from './scripts/tauritavern/agent/agent-context-policy.js';
+import { normalizeAgentContextPolicy, projectAgentPromptInputs } from './scripts/tauritavern/agent/agent-context-policy.js';
 import { createAgentPromptSnapshot } from './scripts/tauritavern/agent/agent-model-messages.js';
 import { buildPromptAssemblyPayload } from './tauri/main/api/agent-prompt-assembly.js';
 import { normalizeAgentSystemPrompt } from './scripts/tauritavern/agent/agent-system-prompt.js';
@@ -134,12 +134,11 @@ import {
     getWorldInfoSettings,
     setWorldInfoSettings,
     world_names,
-    worldInfoCache,
+    selected_world_info,
     flushWorldInfoSaves,
-    loadWorldInfo,
-    updateWorldInfoList,
     deleteWorldInfo,
     importEmbeddedWorldInfo,
+    completeCharacterLorebookAdoption,
     checkEmbeddedWorld,
     setWorldInfoButtonClass,
     wi_anchor_position,
@@ -213,6 +212,8 @@ import {
     openai_messages_count,
     chat_completion_sources,
     getChatCompletionModel,
+    getChatCompletionPreset,
+    normalizeChatCompletionSettingsForPromptAssembly,
     isVertexAiClaudeModelId,
     createGenerationParameters,
     createChatCompletionMacroContext,
@@ -322,7 +323,7 @@ import {
 import { checkOpenRouterAuth, initSecrets, primeSecretStateSnapshot, readSecretState, resolveSecretKey, secret_state } from './scripts/secrets.js';
 import { markdownExclusionExt } from './scripts/showdown-exclusion.js';
 import { markdownUnderscoreExt } from './scripts/showdown-underscore.js';
-import { NOTE_MODULE_NAME, initAuthorsNote, metadata_keys, setFloatingPrompt, shouldWIAddPrompt } from './scripts/authors-note.js';
+import { NOTE_MODULE_NAME, initAuthorsNote, setFloatingPrompt, shouldWIAddPrompt } from './scripts/authors-note.js';
 import { registerPromptManagerMigration } from './scripts/PromptManager.js';
 import { getRegexedString, getRegexedStringBatchAsync, regex_placement } from './scripts/extensions/regex/engine.js';
 import { initLogprobs, saveLogprobsForActiveMessage } from './scripts/logprobs.js';
@@ -3943,28 +3944,27 @@ function cleanGroupMessage(getMessage) {
     return getMessage;
 }
 
-function addPersonaDescriptionExtensionPrompt() {
+function preparePersonaDescriptionExtensionPrompt() {
     const INJECT_TAG = 'PERSONA_DESCRIPTION';
     setExtensionPrompt(INJECT_TAG, '', extension_prompt_types.IN_PROMPT, 0);
 
     if (!power_user.persona_description || power_user.persona_description_position === persona_description_positions.NONE) {
-        return;
+        return null;
     }
 
     const promptPositions = [persona_description_positions.BOTTOM_AN, persona_description_positions.TOP_AN];
-
+    let authorsNote = null;
     if (promptPositions.includes(power_user.persona_description_position) && shouldWIAddPrompt) {
-        const originalAN = extension_prompts[NOTE_MODULE_NAME].value;
-        const ANWithDesc = power_user.persona_description_position === persona_description_positions.TOP_AN
-            ? `${power_user.persona_description}\n${originalAN}`
-            : `${originalAN}\n${power_user.persona_description}`;
-
-        setExtensionPrompt(NOTE_MODULE_NAME, ANWithDesc, chat_metadata[metadata_keys.position], chat_metadata[metadata_keys.depth], extension_settings.note.allowWIScan, chat_metadata[metadata_keys.role]);
+        authorsNote = {
+            before: power_user.persona_description_position === persona_description_positions.TOP_AN ? power_user.persona_description : '',
+            after: power_user.persona_description_position === persona_description_positions.BOTTOM_AN ? power_user.persona_description : '',
+        };
     }
 
     if (power_user.persona_description_position === persona_description_positions.AT_DEPTH) {
         setExtensionPrompt(INJECT_TAG, power_user.persona_description, extension_prompt_types.IN_CHAT, power_user.persona_description_depth, true, power_user.persona_description_role);
     }
+    return authorsNote;
 }
 
 /**
@@ -5764,7 +5764,7 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
     // Set non-WI AN
     setFloatingPrompt();
 
-    // Add WI to prompt (and also inject WI to AN value via hijack)
+    // Add WI to prompt
     // Make quiet prompt available for WIAN
     setExtensionPrompt(inject_ids.QUIET_PROMPT, quiet_prompt || '', extension_prompt_types.IN_PROMPT, 0, true);
     const chatForWI = fullContextCoreChat.map(x => world_info_include_names ? `${x.name}: ${x.mes}` : x.mes).reverse();
@@ -5788,30 +5788,17 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
         worldInfoString, worldInfoBefore, worldInfoAfter, worldInfoExamples,
         worldInfoDepth, outletEntries, worldInfoActivation,
     } = worldInfo;
-    const includeActivatedWorldInfo = !agentMode || resolvedAgentContextPolicy.includeActivatedWorldInfo;
-    const promptWorldInfoBefore = includeActivatedWorldInfo ? worldInfoBefore : '';
-    const promptWorldInfoAfter = includeActivatedWorldInfo ? worldInfoAfter : '';
-
-    // Add message example WI
-    if (includeActivatedWorldInfo) {
-        for (const example of worldInfoExamples) {
-            const exampleMessage = example.content;
-
-            if (exampleMessage.length === 0) {
-                continue;
-            }
-
-            const formattedExample = baseChatReplace(exampleMessage);
-            const cleanedExample = parseMesExamples(formattedExample, isInstruct);
-
-            // Insert depending on before or after position
-            if (example.position === wi_anchor_position.before) {
-                mesExamplesArray.unshift(...cleanedExample);
-            } else {
-                mesExamplesArray.push(...cleanedExample);
-            }
+    let exampleBlocks = { before: [], character: mesExamplesArray, after: [] };
+    for (const example of worldInfoExamples) {
+        if (example.content.length === 0) continue;
+        const cleanedExample = parseMesExamples(baseChatReplace(example.content), isInstruct);
+        if (example.position === wi_anchor_position.before) {
+            exampleBlocks.before.unshift(...cleanedExample);
+        } else {
+            exampleBlocks.after.push(...cleanedExample);
         }
     }
+    mesExamplesArray = [...exampleBlocks.before, ...exampleBlocks.character, ...exampleBlocks.after];
 
     // At this point, the raw message examples can be created
     const mesExamplesRawArray = [...mesExamplesArray];
@@ -5820,7 +5807,7 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
         mesExamplesArray = formatInstructModeExamples(mesExamplesArray, name1, name2);
     }
 
-    if (includeActivatedWorldInfo && skipWIAN !== true) {
+    if (skipWIAN !== true) {
         console.log('skipWIAN not active, adding WIAN');
         // Add all depth WI entries to prompt
         flushWIInjections();
@@ -5836,14 +5823,26 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
             });
         }
     } else {
-        if (agentMode && !includeActivatedWorldInfo) {
-            flushWIInjections();
-        }
-        console.log(agentMode && !includeActivatedWorldInfo ? 'skipping WIAN by Agent context policy' : 'skipping WIAN');
+        console.log('skipping WIAN');
     }
 
     // Add persona description to prompt
-    addPersonaDescriptionExtensionPrompt();
+    const personaAuthorsNote = preparePersonaDescriptionExtensionPrompt();
+    const worldInfoAuthorsNote = worldInfo.anBefore.length || worldInfo.anAfter.length
+        ? { before: worldInfo.anBefore.join('\n'), after: worldInfo.anAfter.join('\n') }
+        : null;
+    const authorsNote = extension_prompts[NOTE_MODULE_NAME];
+    const authorsNoteAdditions = shouldWIAddPrompt && (worldInfoAuthorsNote || personaAuthorsNote) ? {
+        position: authorsNote.position,
+        depth: authorsNote.depth,
+        role: authorsNote.role,
+        worldInfo: worldInfoAuthorsNote,
+        persona: personaAuthorsNote,
+    } : null;
+    if (!agentMode && authorsNoteAdditions) {
+        const note = composeAuthorsNote(authorsNote, authorsNoteAdditions);
+        setExtensionPrompt(NOTE_MODULE_NAME, note.value, note.position, note.depth, extension_settings.note.allowWIScan, note.role);
+    }
 
     // Prepare the system prompt for Text Completion APIs
     if (main_api !== 'openai') {
@@ -5870,10 +5869,10 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
         system: system,
         char: name2,
         user: name1,
-        wiBefore: promptWorldInfoBefore,
-        wiAfter: promptWorldInfoAfter,
-        loreBefore: promptWorldInfoBefore,
-        loreAfter: promptWorldInfoAfter,
+        wiBefore: worldInfoBefore,
+        wiAfter: worldInfoAfter,
+        loreBefore: worldInfoBefore,
+        loreAfter: worldInfoAfter,
         anchorBefore: beforeScenarioAnchor.trim(),
         anchorAfter: afterScenarioAnchor.trim(),
         mesExamples: mesExamplesArray.join(''),
@@ -5899,6 +5898,7 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
     // Story string rendered, safe to remove
     if (power_user.strip_examples) {
         mesExamplesArray = [];
+        exampleBlocks = { before: [], character: [], after: [] };
     }
 
     // Inject all Depth prompts. Chat Completion does it separately
@@ -5990,6 +5990,7 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
     }
 
     let oaiMessages = [];
+    let oaiExampleBlocks = null;
     let oaiMessageExamples = [];
 
     if (main_api === 'openai') {
@@ -5997,7 +5998,12 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
             coreChat,
             stripOldToolCalls,
         );
-        oaiMessageExamples = setOpenAIMessageExamples(mesExamplesArray);
+        oaiExampleBlocks = {
+            before: setOpenAIMessageExamples(exampleBlocks.before),
+            character: setOpenAIMessageExamples(exampleBlocks.character),
+            after: setOpenAIMessageExamples(exampleBlocks.after),
+        };
+        oaiMessageExamples = [...oaiExampleBlocks.before, ...oaiExampleBlocks.character, ...oaiExampleBlocks.after];
     }
 
     // hack for regeneration of the first message
@@ -6381,8 +6387,8 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
             scenario,
             char: name2,
             user: name1,
-            worldInfoBefore: promptWorldInfoBefore,
-            worldInfoAfter: promptWorldInfoAfter,
+            worldInfoBefore,
+            worldInfoAfter,
             beforeScenarioAnchor,
             afterScenarioAnchor,
             storyString,
@@ -6457,8 +6463,8 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
                 charDescription: description,
                 charPersonality: personality,
                 scenario: scenario,
-                worldInfoBefore: promptWorldInfoBefore,
-                worldInfoAfter: promptWorldInfoAfter,
+                worldInfoBefore,
+                worldInfoAfter,
                 extensionPrompts: extensionPromptSnapshot,
                 bias: promptBias,
                 type: type,
@@ -6470,18 +6476,34 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
                 messages: oaiMessages,
                 messageExamples: oaiMessageExamples,
             };
+            let workingInputs = promptInputs;
+            if (agentMode) {
+                // Sealed after GENERATE_AFTER_DATA; must stay unprojected.
+                agentPromptInputs = {
+                    ...promptInputs,
+                    messageExamples: oaiExampleBlocks.character,
+                    worldInfoExamples: { before: oaiExampleBlocks.before, after: oaiExampleBlocks.after },
+                    authorsNoteAdditions,
+                };
+                workingInputs = projectAgentPromptInputs(agentPromptInputs, resolvedAgentContextPolicy);
+                // Live {{outlet}} reads globals, which must hold the root's projected WI injections.
+                flushWIInjections();
+                for (const [key, prompt] of Object.entries(workingInputs.extensionPrompts)) {
+                    if (isWorldInfoInjection(key)) {
+                        setExtensionPrompt(key, prompt.value, prompt.position, prompt.depth, prompt.scan, prompt.role);
+                    }
+                }
+            }
             const [prompt, counts, evaluatedToolData] = await prepareOpenAIMessages({
-                ...promptInputs,
+                ...workingInputs,
                 allowToolCalls: canAdvertiseToolCalls,
                 agentMode,
-                agentContextPolicy: resolvedAgentContextPolicy,
                 agentSystemPrompt: resolvedAgentSystemPrompt,
                 legacyMcpToolRound,
                 quietToolRequest,
             }, dryRun);
             toolData = evaluatedToolData;
             generate_data = { prompt: prompt };
-            if (agentMode) agentPromptInputs = promptInputs;
 
             // TODO: move these side-effects somewhere else, so this switch-case solely sets generate_data
             // counts will return false if the user has not enabled the token breakdown feature
@@ -6503,9 +6525,15 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
     if (agentMode) {
         const context = captureMacroContext();
         context.state.lastGenerationType = type || 'normal';
+        const settings = structuredClone(oai_settings);
+        const currentPreset = {
+            apiId: 'openai',
+            name: settings.preset_settings_openai,
+            settings: getChatCompletionPreset(settings),
+        };
         const currentModelConnection = await buildCurrentModelConnectionSnapshot({
-            settings: oai_settings,
-            model: getChatCompletionModel(oai_settings),
+            settings,
+            model: getChatCompletionModel(settings),
             secretKey: resolveSecretKey(),
             secretState: secret_state,
         });
@@ -6513,6 +6541,7 @@ async function GenerateInternal(type, { automatic_trigger, force_name2, quiet_pr
             generationType: type,
             promptInputs: agentPromptInputs,
             worldInfoActivation,
+            currentPreset,
             currentModelConnection,
         }, context, buildAgentReadOnlyMacros(context, characterFields, characterExamples)));
     }
@@ -6909,7 +6938,7 @@ async function startAgentRunFromGeneratedPrompt({ type, generateData, jsonSchema
 
     if (promptAssembly?.mode === 'currentPromptSnapshot') {
         const settings = await buildSettingsWithCurrentModelConnectionSnapshot(
-            oai_settings,
+            normalizeChatCompletionSettingsForPromptAssembly(frozenRunInputSnapshot.currentPreset.settings),
             frozenRunInputSnapshot.currentModelConnection,
         );
         const model = getChatCompletionModel(settings);
@@ -6917,15 +6946,17 @@ async function startAgentRunFromGeneratedPrompt({ type, generateData, jsonSchema
             throw new Error('agent.model_required: current chat-completion source did not resolve a model');
         }
 
+        const workingInputs = projectAgentPromptInputs(frozenRunInputSnapshot.promptInputs, agentContextPolicy);
+        const macroContext = createChatCompletionMacroContext(
+            createMacroContextFromSnapshot(frozenRunInputSnapshot, workingInputs), settings, model,
+        );
         const { generate_data: chatCompletionPayload } = await createGenerationParameters(
             settings,
             model,
             type,
             structuredClone(messages),
             {
-                jsonSchema, agentMode: true,
-                macroContext: createChatCompletionMacroContext(
-                    createMacroContextFromSnapshot(frozenRunInputSnapshot), settings, model),
+                jsonSchema, agentMode: true, macroContext,
             },
         );
 
@@ -7251,11 +7282,8 @@ async function doChatInject(messages, isContinue) {
 }
 
 function flushWIInjections() {
-    const depthPrefix = inject_ids.CUSTOM_WI_DEPTH;
-    const outletPrefix = inject_ids.CUSTOM_WI_OUTLET('');
-
     for (const key of Object.keys(extension_prompts)) {
-        if (key.startsWith(depthPrefix) || key.startsWith(outletPrefix)) {
+        if (isWorldInfoInjection(key)) {
             delete extension_prompts[key];
         }
     }
@@ -12417,47 +12445,38 @@ export async function swipe_right(event = null, { source, repeated, message } = 
 }
 
 /**
- * Imports supported files dropped into the app window.
+ * Imports character files and completes their lorebook adoption and post-import steps.
  * @param {File[]} files Array of files to process
  * @param {Map<File, string>} [data] Extra data to pass to the import function
  * @param {{ replacement?: boolean }} [options] Internal import intent
  * @returns {Promise<void>}
  */
 export async function processDroppedFiles(files, data = new Map(), { replacement = false } = {}) {
-    const allowedMimeTypes = [
-        'application/json',
-        'image/png',
-        'application/yaml',
-        'application/x-yaml',
-        'text/yaml',
-        'text/x-yaml',
-    ];
-
-    const allowedExtensions = [
-        'charx',
-        'byaf',
-    ];
+    if (is_group_generating || is_send_press) {
+        toastr.error(t`Cannot import characters while generating. Stop the request and try again.`, t`Import aborted`);
+        throw new Error('Cannot import character while generating');
+    }
+    try {
+        await flushWorldInfoSaves('import_character_lorebook');
+    } catch (error) {
+        toastr.error(error?.message, t`Import aborted`);
+        throw error;
+    }
 
     const avatarFileNames = [];
-    const replacements = [];
     pauseImportedCharacterAgentAssetQueue();
     try {
         for (const file of files) {
-            const extension = file.name.split('.').pop().toLowerCase();
-            if (allowedMimeTypes.some(x => file.type.startsWith(x)) || allowedExtensions.includes(extension)) {
-                const preservedName = data instanceof Map && data.get(file);
-                const imported = await importCharacter(file, { preserveFileName: preservedName, replacement });
-                if (imported) {
-                    avatarFileNames.push(imported.avatarFileName);
-                    if (imported.replaced) {
-                        replacements.push(imported.avatarFileName);
-                    }
+            const preservedName = data instanceof Map && data.get(file);
+            const imported = await importCharacter(file, { preserveFileName: preservedName, replacement });
+            if (imported) {
+                avatarFileNames.push(imported.avatarFileName);
+                try {
+                    await completeCharacterLorebookAdoption(imported.avatarFileName, imported.lorebook, { notify: imported.replaced });
+                } catch (error) {
+                    console.warn('Character imported, but its lorebook adoption could not be completed:', error);
+                    toastr.warning(error?.message, t`Character imported; lorebook import failed`);
                 }
-            } else {
-                if (replacement) {
-                    throw new Error(t`Unsupported file type: ` + file.name);
-                }
-                toastr.warning(t`Unsupported file type: ` + file.name);
             }
         }
 
@@ -12467,15 +12486,6 @@ export async function processDroppedFiles(files, data = new Map(), { replacement
             } catch (error) {
                 console.warn('Characters imported, but their tags could not be imported:', error);
                 toastr.warning(error?.message, t`Characters imported; tag import failed`);
-            }
-        }
-
-        for (const avatarFileName of replacements) {
-            try {
-                await resolveCharacterLorebookConflict(avatarFileName);
-            } catch (error) {
-                console.warn('Character replaced, but its World/Lorebook conflict could not be resolved:', error);
-                toastr.warning(error?.message, t`Character replaced; World/Lorebook follow-up failed`);
             }
         }
 
@@ -12523,21 +12533,16 @@ function selectImportedChar(charId) {
  * @param {File} file File to import
  * @param {object} [options] - Options
  * @param {string} [options.preserveFileName] Whether to preserve original file name
- * @param {Boolean} [options.importTags=false] Whether to import tags
  * @param {Boolean} [options.replacement=false] Whether this import was explicitly requested as a replacement
- * @returns {Promise<{ avatarFileName: string, replaced: boolean }|undefined>}
+ * @returns {Promise<TauriTavernCharacterImportResult|undefined>}
  */
-async function importCharacter(file, { preserveFileName = '', importTags = false, replacement = false } = {}) {
-    if (is_group_generating || is_send_press) {
-        toastr.error(t`Cannot import characters while generating. Stop the request and try again.`, t`Import aborted`);
-        throw new Error('Cannot import character while generating');
-    }
-
+async function importCharacter(file, { preserveFileName = '', replacement = false } = {}) {
     const ext = file.name.match(/\.(\w+)$/);
     if (!ext || !(['json', 'png', 'yaml', 'yml', 'charx', 'byaf'].includes(ext[1].toLowerCase()))) {
         if (replacement) {
             throw new Error(t`Unsupported file type: ` + file.name);
         }
+        toastr.warning(t`Unsupported file type: ` + file.name);
         return;
     }
 
@@ -12550,10 +12555,6 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
     if (preserveFileName) formData.append('preserved_name', preserveFileName);
 
     try {
-        if (replacement) {
-            await flushWorldInfoSaves('replace_character_lorebook_conflict');
-        }
-
         const result = await fetch('/api/characters/import', {
             method: 'POST',
             body: formData,
@@ -12592,33 +12593,10 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
 
             $('#character_search_bar').val('').trigger('input');
 
-            const linkedWorld = String(
-                data.character?.data?.extensions?.world
-                || data.character?.extensions?.world
-                || '',
-            );
-            if (linkedWorld && !world_names?.includes(linkedWorld)) {
-                try {
-                    await updateWorldInfoList();
-                } catch (error) {
-                    console.warn('Character imported, but the World/Lorebook list could not be refreshed:', error);
-                    toastr.warning(error?.message, t`Character imported; World/Lorebook refresh failed`);
-                }
-            }
-
             if (replaced) {
                 toastr.success(t`Character Replaced: ${String(data.file_name).replace('.png', '')}`);
             } else {
                 toastr.success(t`Character Created: ${String(data.file_name).replace('.png', '')}`);
-            }
-            if (importTags) {
-                try {
-                    await importCharactersTags([avatarFileName]);
-                    selectImportedChar(data.file_name);
-                } catch (error) {
-                    console.warn('Character imported, but its tags could not be imported:', error);
-                    toastr.warning(error?.message, t`Character imported; tag import failed`);
-                }
             }
             try {
                 enqueueImportedCharacterAgentAssetScan({
@@ -12631,7 +12609,7 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
                 console.warn('Character imported, but its Agent assets could not be inspected:', error);
                 toastr.warning(error?.message, t`Character imported; Agent asset scan failed`);
             }
-            return { avatarFileName, replaced };
+            return { avatarFileName, replaced, lorebook: data.lorebook };
         }
 
         if (replacement) {
@@ -12670,199 +12648,6 @@ async function importFromURL(items, files) {
     }
 }
 
-async function readLorebookConflictResponse(response) {
-    const data = await response.clone().json().catch(() => null);
-    if (!response.ok || data?.error) {
-        const responseText = data ? '' : await response.text().catch(() => '');
-        const error = new Error(data?.details || data?.error || responseText || response.statusText);
-        Object.assign(error, { status: response.status });
-        throw error;
-    }
-    if (!data) {
-        throw new Error(t`Invalid World/Lorebook response.`);
-    }
-
-    return data;
-}
-
-async function getCharacterLorebookConflict(avatarFileName) {
-    const response = await fetch('/api/characters/lorebook-conflict', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ avatar_url: avatarFileName }),
-        cache: 'no-cache',
-    });
-
-    return readLorebookConflictResponse(response);
-}
-
-async function syncResolvedWorldInfo(resolved) {
-    const worldName = String(resolved?.affected_world || '');
-    if (!worldName) {
-        throw new Error(t`The resolved World/Lorebook name is missing.`);
-    }
-
-    worldInfoCache.delete(worldName);
-    const worldData = await loadWorldInfo(worldName);
-    if (!worldData) {
-        throw new Error(t`Failed to load the resolved World/Lorebook.`);
-    }
-
-    if (resolved.world_written) {
-        await eventSource.emit(event_types.WORLDINFO_UPDATED, worldName, worldData);
-    }
-    if (!world_names?.includes(worldName)) {
-        await updateWorldInfoList();
-        if (!world_names?.includes(worldName)) {
-            throw new Error(t`Failed to refresh the World/Lorebook list.`);
-        }
-    }
-}
-
-async function applyCharacterLorebookConflictResolution(avatarFileName, resolution, conflictToken) {
-    if (!conflictToken) {
-        throw new Error(t`The World/Lorebook conflict token is missing.`);
-    }
-
-    const response = await fetch('/api/characters/resolve-lorebook-conflict', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            avatar_url: avatarFileName,
-            resolution,
-            conflict_token: conflictToken,
-        }),
-        cache: 'no-cache',
-    });
-    const resolved = await readLorebookConflictResponse(response);
-
-    if (resolved?.affected_world) {
-        try {
-            await syncResolvedWorldInfo(resolved);
-        } catch (error) {
-            console.error('Failed to synchronize resolved World/Lorebook state:', error);
-            toastr.error(error?.message, t`World/Lorebook refresh failed`);
-        }
-    } else if (resolution !== 'current') {
-        throw new Error(t`The resolved World/Lorebook name is missing.`);
-    }
-
-    const characterIndex = characters.findIndex(character => character.avatar === avatarFileName);
-    if (characterIndex !== -1) {
-        characters[characterIndex].data.extensions.world = String(resolved.world || '');
-        await getOneCharacter(avatarFileName);
-        if (String(characterIndex) === String(this_chid)) {
-            select_selected_character(this_chid, { switchMenu: false });
-        }
-    }
-
-    if (resolution === 'copy') {
-        const message = resolved.world
-            ? t`The embedded World/Lorebook was saved as '${String(resolved.affected_world)}'. The current link was kept.`
-            : t`The embedded World/Lorebook was saved as '${String(resolved.affected_world)}'. It was not bound automatically.`;
-        toastr.success(
-            message,
-            t`World/Lorebook saved`,
-        );
-    }
-}
-
-/**
- * @returns {Promise<boolean>} Whether the conflict is resolved; false when deferred.
- */
-async function resolveCharacterLorebookConflict(avatarFileName) {
-    while (true) {
-        const conflict = await getCharacterLorebookConflict(avatarFileName);
-        if (!conflict?.conflict) {
-            return true;
-        }
-
-        const conflictToken = String(conflict.conflict_token || '');
-        const worldName = String(conflict.world || '');
-        const embeddedName = String(conflict.embedded_name || t`Embedded World/Lorebook`);
-        const currentAvailable = Boolean(conflict.current_available);
-        const currentWorldLabel = worldName
-            ? `<code>${escapeHtml(worldName)}</code>`
-            : `<code>${t`missing`}</code>`;
-        const resolutionMessage = currentAvailable
-            ? `<div>${t`Using the embedded version overwrites the local World/Lorebook and may affect other characters.`}</div>
-               <div>${t`Saving a copy keeps the current link and stores the embedded version separately.`}</div>
-               <div>${t`Keeping the current version replaces the card's embedded copy with the local version.`}</div>`
-            : `<div>${t`The linked local World/Lorebook is missing. Use the embedded version to restore it, or save an unbound copy.`}</div>`;
-        const popupBody = `
-            <div>${t`The card's embedded World/Lorebook differs from the linked local version.`}</div>
-            <div class="m-t-1">${t`Current local World/Lorebook:`} ${currentWorldLabel}</div>
-            <div>${t`Embedded World/Lorebook:`} <code>${escapeHtml(embeddedName)}</code></div>
-            <div class="m-t-1">${resolutionMessage}</div>
-        `;
-        const customButtons = [
-            {
-                text: t`Use Embedded`,
-                result: POPUP_RESULT.CUSTOM1,
-            },
-            {
-                text: currentAvailable ? t`Keep Both` : t`Save a Copy`,
-                result: POPUP_RESULT.CUSTOM2,
-            },
-        ];
-        if (currentAvailable) {
-            customButtons.push({
-                text: t`Keep Local`,
-                result: POPUP_RESULT.CUSTOM3,
-            });
-        }
-
-        const result = await Popup.show.confirm(t`World/Lorebook conflict`, popupBody, {
-            okButton: false,
-            cancelButton: t`Not Now`,
-            customButtons,
-            defaultResult: currentAvailable ? POPUP_RESULT.CUSTOM2 : POPUP_RESULT.CUSTOM1,
-        });
-        const resolution = {
-            [POPUP_RESULT.CUSTOM1]: 'embedded',
-            [POPUP_RESULT.CUSTOM2]: 'copy',
-            [POPUP_RESULT.CUSTOM3]: 'current',
-        }[result];
-        if (!resolution) {
-            return false;
-        }
-
-        try {
-            await applyCharacterLorebookConflictResolution(
-                avatarFileName,
-                resolution,
-                conflictToken,
-            );
-            return true;
-        } catch (error) {
-            if (error?.status === 409) {
-                continue;
-            }
-            throw error;
-        }
-    }
-}
-
-async function resolveCharacterLorebookConflictBeforeNewChat() {
-    if (selected_group || this_chid === undefined) {
-        return true;
-    }
-
-    const character = characters[this_chid];
-    if (!character?.avatar) {
-        return true;
-    }
-
-    try {
-        await flushWorldInfoSaves('new_chat_lorebook_conflict_check');
-        return await resolveCharacterLorebookConflict(character.avatar);
-    } catch (error) {
-        console.error('Failed to resolve character lorebook conflict before new chat.', error);
-        toastr.error(error?.message || t`Failed to resolve the World/Lorebook conflict.`, t`New chat cancelled`);
-        return false;
-    }
-}
-
 export async function doNewChat({ deleteCurrentChat = false } = {}) {
     //Make a new chat for selected character
     if ((!selected_group && this_chid == undefined) || menu_type == 'create') {
@@ -12871,9 +12656,6 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
 
     if (!deleteCurrentChat) {
         await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-    }
-    if (!await resolveCharacterLorebookConflictBeforeNewChat()) {
-        return;
     }
     const oldChat = getCurrentChatDetails()?.sessionName;
     const groupId = selected_group;
@@ -13101,7 +12883,7 @@ export async function handleDeleteCharacter(this_chid, delete_chats) {
 }
 
 /**
- * Deletes a character completely, including associated chats if specified
+ * Deletes characters and their unreferenced primary lorebooks, including chats if specified.
  *
  * @param {string|string[]} characterKey - The key (avatar) of the character to be deleted
  * @param {Object} [options] - Optional parameters for the deletion
@@ -13129,7 +12911,8 @@ export async function deleteCharacter(characterKey, { deleteChats = true } = {})
         return false;
     }
 
-    let deleted = false;
+    const deletedAvatars = new Set();
+    const candidateLorebooks = new Set();
 
     for (const key of characterKey) {
         const character = characters.find(x => x.avatar == key);
@@ -13137,6 +12920,7 @@ export async function deleteCharacter(characterKey, { deleteChats = true } = {})
             toastr.warning(t`Character ${key} not found. Skipping deletion.`);
             continue;
         }
+        const world = character.data?.extensions?.world;
 
         const chid = characters.indexOf(character);
         const pastChats = deleteChats
@@ -13159,6 +12943,9 @@ export async function deleteCharacter(characterKey, { deleteChats = true } = {})
             toastr.error(`${response.status} ${response.statusText}`, t`Failed to delete character`);
             continue;
         }
+        deletedAvatars.add(character.avatar);
+        // Only strings identify lorebooks; card extensions preserve other JSON types.
+        if (typeof world === 'string' && world) candidateLorebooks.add(world);
 
         try {
             const { clearCharacterSkillImportReminders } = await import('./scripts/tauri/agent-skills/reminders.js');
@@ -13180,7 +12967,23 @@ export async function deleteCharacter(characterKey, { deleteChats = true } = {})
         }
 
         await eventSource.emit(event_types.CHARACTER_DELETED, { id: chid, character: character });
-        deleted = true;
+    }
+
+    // Decide from the loaded list before a refresh can replace it, including after partial failure.
+    const remainingCharacterFiles = new Set();
+    for (const character of characters) {
+        if (deletedAvatars.has(character.avatar)) continue;
+        candidateLorebooks.delete(character.data?.extensions?.world);
+        remainingCharacterFiles.add(getCharaFilename(null, { manualAvatarKey: character.avatar }));
+    }
+    for (const lore of world_info.charLore ?? []) {
+        if (!remainingCharacterFiles.has(lore.name)) continue;
+        for (const world of lore.extraBooks ?? []) candidateLorebooks.delete(world);
+    }
+    for (const world of selected_world_info) candidateLorebooks.delete(world);
+    candidateLorebooks.delete(power_user.persona_description_lorebook);
+    for (const persona of Object.values(power_user.persona_descriptions)) {
+        candidateLorebooks.delete(persona.lorebook);
     }
 
     try {
@@ -13189,15 +12992,18 @@ export async function deleteCharacter(characterKey, { deleteChats = true } = {})
         console.error('Character deleted, but the UI refresh failed:', error);
         toastr.warning(t`Character deleted, but the character list could not be refreshed.`);
     }
-    if (deleted) {
+    for (const world of candidateLorebooks) {
         try {
-            await updateWorldInfoList();
+            if (await deleteWorldInfo(world, { saveLinkedCharacter: false })) {
+                toastr.success(t`Also deleted lorebook "${world}"`);
+            }
         } catch (error) {
-            console.error('Character deleted, but the World/Lorebook list refresh failed:', error);
+            console.error('Character deleted, but its lorebook cleanup could not be completed:', error);
+            toastr.warning(error?.message, t`Character deleted; lorebook cleanup failed`);
         }
     }
 
-    return deleted;
+    return deletedAvatars.size > 0;
 }
 
 /**
@@ -14134,23 +13940,10 @@ jQuery(async function () {
             return;
         }
 
-        const avatarFileNames = [];
-        pauseImportedCharacterAgentAssetQueue();
         try {
-            for (const file of e.target.files) {
-                const imported = await importCharacter(file);
-                if (imported) {
-                    avatarFileNames.push(imported.avatarFileName);
-                }
-            }
-
-            if (avatarFileNames.length > 0) {
-                await importCharactersTags(avatarFileNames);
-                selectImportedChar(avatarFileNames[avatarFileNames.length - 1]);
-            }
+            await processDroppedFiles(Array.from(e.target.files));
         } finally {
-            resumeImportedCharacterAgentAssetQueue();
-            // Clear the file input value to allow re-uploading the same file
+            // Allow selecting the same file again.
             e.target.value = '';
         }
     });
@@ -14524,7 +14317,6 @@ jQuery(async function () {
                 break;
             case 'import_character_info':
                 await importEmbeddedWorldInfo();
-                saveCharacterDebounced();
                 break;
             case 'character_source': {
                 const source = getCharacterSource(this_chid);

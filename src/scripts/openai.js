@@ -32,8 +32,7 @@ import {
 import { getGroupNames, selected_group } from './group-chats.js';
 import { extension_prompt_roles, extension_prompt_types } from './extension-prompts.js';
 import { allowlistSettingAllows, getActiveIosPolicyCapabilities } from './tauritavern/ios-policy.js';
-import { materializeInitialChatHistoryMessages } from './tauritavern/agent/agent-context-policy.js';
-import { agentMessageProjection, prepareAgentHistory } from './tauritavern/agent/agent-model-messages.js';
+import { agentMessageProjection } from './tauritavern/agent/agent-model-messages.js';
 import { projectToolTurns } from './tauritavern/tool-turn-projection.js';
 import { canReplayProviderMetadata, getChatCompletionRequestContext } from './tauritavern/provider-replay.js';
 import { prepareBrowserChatCompletion } from '../web/chat-completion-jobs.js';
@@ -2002,7 +2001,6 @@ export function getPromptRole(role) {
  * @param {object} options.extensionPrompts - Frozen/materialized extension prompt snapshot.
  * @param {(message: string) => void} options.attachWarning - Warning sink for attach-existing prompt issues.
  * @param {boolean} [options.agentMode] Skip legacy frontend tool registration for Agent-owned tool loops.
- * @param {object|null} [options.agentContextPolicy] Agent initial prompt context policy.
  * @param {string|null} [options.agentSystemPrompt] Resolved Agent system prompt content.
  * @param {string|null} [options.agentTaskPrompt] Invocation task prompt content.
  * @param {boolean} [options.allowToolCalls] Whether this request can register legacy frontend tools.
@@ -2010,7 +2008,7 @@ export function getPromptRole(role) {
  * @param {import('../script.js').QuietToolRequest|null} [options.quietToolRequest] One-shot tools and a literal control message.
  * @returns {Promise<[number, object|null]>} Raw chat record count and evaluated legacy tool data.
  */
-async function populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, agentMessages = null, messageExamples, extensionPrompts, attachWarning, agentMode = false, agentContextPolicy = null, agentSystemPrompt = null, agentTaskPrompt = null, allowToolCalls = true, legacyMcpToolRound = null, quietToolRequest = null }, runtime = null) {
+async function populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples, extensionPrompts, attachWarning, agentMode = false, agentSystemPrompt = null, agentTaskPrompt = null, allowToolCalls = true, legacyMcpToolRound = null, quietToolRequest = null }, runtime = null) {
     const assemblyRuntime = getPromptAssemblyRuntime(runtime);
     const activePromptManager = assemblyRuntime.promptManager;
     const settings = assemblyRuntime.settings;
@@ -2019,13 +2017,6 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
 
     if (!agentMode) {
         removeAgentOnlyPrompts(prompts);
-    } else {
-        // Agent frozen input keeps PromptManager's latest-first raw history.
-        // Work on a materialized copy because downstream assembly splices,
-        // attaches, and reverses messages into provider chronological order.
-        messages = agentMessages === null
-            ? materializeInitialChatHistoryMessages(messages, agentContextPolicy)
-            : prepareAgentHistory(agentMessages, agentContextPolicy);
     }
 
     // Helper function for preparing a prompt, that already exists within the prompt collection, for completion
@@ -2400,7 +2391,6 @@ async function preparePromptsForChatCompletion({ scenario, charPersonality, name
  * @param {string[]} content.messageExamples - An array of messages to be used as dialogue examples.
  * @param {boolean} [content.allowToolCalls] Whether this request can register legacy frontend tools.
  * @param {boolean} [content.agentMode] Skip legacy frontend tool state for Agent-owned tool loops.
- * @param {object|null} [content.agentContextPolicy] Agent initial prompt context policy.
  * @param {string|null} [content.agentSystemPrompt] Resolved Agent system prompt content.
  * @param {string|null} [content.agentTaskPrompt] Invocation task prompt content.
  * @param {object|null} [content.legacyMcpToolRound] Private MCP tools for this Legacy generation round.
@@ -2424,10 +2414,8 @@ export async function prepareOpenAIMessages({
     systemPromptOverride,
     jailbreakPromptOverride,
     messages,
-    agentMessages = null,
     messageExamples,
     agentMode = false,
-    agentContextPolicy = null,
     agentSystemPrompt = null,
     agentTaskPrompt = null,
     allowToolCalls = true,
@@ -2485,7 +2473,7 @@ export async function prepareOpenAIMessages({
         };
 
         // Fill the chat completion with as much context as the budget allows
-        [chatSourceCount, toolData] = await populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, agentMessages, messageExamples, extensionPrompts, attachWarning, agentMode, agentContextPolicy, agentSystemPrompt, agentTaskPrompt, allowToolCalls, legacyMcpToolRound, quietToolRequest }, assemblyRuntime);
+        [chatSourceCount, toolData] = await populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples, extensionPrompts, attachWarning, agentMode, agentSystemPrompt, agentTaskPrompt, allowToolCalls, legacyMcpToolRound, quietToolRequest }, assemblyRuntime);
     } catch (error) {
         if (error instanceof TokenBudgetExceededError) {
             assemblyRuntime.showToasts && toastr.error(t`Mandatory prompts exceed the context size.`);
@@ -2542,7 +2530,6 @@ export async function prepareOpenAIMessages({
  *   macroContext?: Record<string, unknown> | null;
  *   jsonSchema?: unknown;
  *   agentMode?: boolean;
- *   agentContextPolicy?: TauriTavernAgentProfileDefinition['context'] | null;
  *   agentSystemPrompt?: string | null;
  *   agentTaskPrompt?: string | null;
  *   contextKind?: 'chat' | 'session';
@@ -2556,7 +2543,6 @@ export async function assembleOpenAIChatCompletionPrompt({
     macroContext = null,
     jsonSchema = null,
     agentMode = true,
-    agentContextPolicy = null,
     agentSystemPrompt = null,
     agentTaskPrompt = null,
     contextKind = 'chat',
@@ -2596,7 +2582,6 @@ export async function assembleOpenAIChatCompletionPrompt({
         ...promptInputs,
         type: normalizedGenerationType,
         agentMode,
-        agentContextPolicy,
         agentSystemPrompt,
         agentTaskPrompt,
     }, true, runtime);
@@ -2640,9 +2625,7 @@ export function createChatCompletionMacroContext(context, settings, model) {
 
 /**
  * Builds deterministic chat-completion settings for headless Agent prompt assembly.
- * Saved OpenAI presets are deltas over SillyTavern's full settings object; Agent
- * assembly cannot read the current UI state, so missing fields are filled from the
- * canonical defaults before normal migration is applied.
+ * `settingsToUpdate` only renames preset keys; resolved keys outside it, such as `secret_id`, must pass through.
  *
  * @param {Record<string, any>} settings Preset/effective chat-completion settings
  * @returns {Record<string, any>} Normalized settings
@@ -2654,6 +2637,12 @@ export function normalizeChatCompletionSettingsForPromptAssembly(settings) {
 
     const normalized = structuredClone(default_settings);
     Object.assign(normalized, structuredClone(settings));
+    for (const [presetKey, [, settingsKey]] of Object.entries(settingsToUpdate)) {
+        if (presetKey !== settingsKey && normalized[presetKey] !== undefined) {
+            normalized[settingsKey] = normalized[presetKey];
+            delete normalized[presetKey];
+        }
+    }
     migrateChatCompletionSettings(normalized);
     return normalized;
 }
