@@ -19,7 +19,10 @@ export function createBrowserFileTransfer({
         return document.body;
     }
 
-    /** Must be called during a user gesture. Cancellation returns null; failures reject. */
+    /**
+     * Must be called during a user gesture. Cancellation returns null; failures reject.
+     * @param {{ kind?: keyof typeof ACCEPT_BY_KIND; multiple?: boolean; signal?: AbortSignal }} [options]
+     */
     function pickFiles({ kind, multiple = false, signal } = {}) {
         if (!Object.hasOwn(ACCEPT_BY_KIND, kind)) {
             throw new TypeError(`Unsupported file selection kind: ${kind}`);
