@@ -74,7 +74,11 @@ pub(super) async fn dispatch(
         ),
         "adopt_character_lorebook" => {
             let dto: AdoptCharacterLorebookDto = a.required("dto")?;
-            json(s.character_service.adopt_character_lorebook(&dto.name).await?)
+            json(
+                s.character_service
+                    .adopt_character_lorebook(&dto.name)
+                    .await?,
+            )
         }
         "resolve_character_lorebook_adoption" => json(
             s.character_service
