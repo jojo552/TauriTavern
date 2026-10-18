@@ -1,5 +1,5 @@
 use super::*;
-use tt_application::dto::character_dto::RenameCharacterDto;
+use tt_application::dto::character_dto::{DeleteCharacterDto, RenameCharacterDto};
 use tt_application::services::preset_service::PresetService;
 use tt_domain::models::skill::{
     SkillImportInput, SkillInlineFile, SkillInstallRequest, SkillScope, SkillScopeFilter,
