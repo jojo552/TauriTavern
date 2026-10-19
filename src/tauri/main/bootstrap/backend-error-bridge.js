@@ -1,6 +1,6 @@
 // @ts-check
 
-import { invoke as hostInvoke, listen as hostListen, isProjectHost, onHostSessionReset } from '../../../tauri-bridge.js';
+import { invoke as hostInvoke, listen as hostListen, onHostSessionReset } from '../../../tauri-bridge.js';
 
 const TAURI_BACKEND_ERROR_EVENT = 'tauritavern-backend-error';
 const FRONTEND_BACKEND_ERROR_EVENT = 'tauritavern:backend-error';
@@ -13,29 +13,20 @@ function normalizeBackendErrorPayload(payload) {
         const message = payload.trim();
         return message ? { message } : null;
     }
-
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-        return null;
-    }
-
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
     const message = typeof payload.message === 'string' ? payload.message.trim() : '';
     return message ? { message } : null;
 }
 
 function publishBackendError(payload) {
     const normalized = normalizeBackendErrorPayload(payload);
-    if (!normalized) {
-        return;
-    }
-
+    if (!normalized) return;
     if (window[BACKEND_ERROR_READY_KEY]) {
         window.dispatchEvent(new CustomEvent(FRONTEND_BACKEND_ERROR_EVENT, { detail: normalized }));
         return;
     }
-
     const queuedErrors = Array.isArray(window[BACKEND_ERROR_QUEUE_KEY])
-        ? window[BACKEND_ERROR_QUEUE_KEY]
-        : [];
+        ? window[BACKEND_ERROR_QUEUE_KEY] : [];
     queuedErrors.push(normalized);
     if (queuedErrors.length > MAX_BACKEND_ERROR_QUEUE_SIZE) {
         queuedErrors.splice(0, queuedErrors.length - MAX_BACKEND_ERROR_QUEUE_SIZE);
@@ -55,25 +46,19 @@ export async function installBackendErrorBridge({
     listen = hostListen,
     sessionReset = onHostSessionReset,
 } = {}) {
-    if (!isProjectHost()) return;
-
     const stopListening = await listen(TAURI_BACKEND_ERROR_EVENT, (event) => {
         publishBackendError(event?.payload);
     });
-
     async function declareReady() {
         const pendingErrors = await invoke('backend_error_bridge_ready');
         if (Array.isArray(pendingErrors)) {
-            for (const payload of pendingErrors) {
-                publishBackendError(payload);
-            }
+            for (const payload of pendingErrors) publishBackendError(payload);
         }
     }
-
     let stopReset;
     try {
-        // Listeners survive a replaced browser session. Declare readiness on its new page,
-        // not on a short SSE reconnect, and let the transport report reset-handler failures.
+        // Replaced HTTP pages must declare readiness again; a short SSE reconnect
+        // keeps this page and does not repeat the declaration or any user operation.
         stopReset = sessionReset(declareReady);
         await declareReady();
     } catch (error) {

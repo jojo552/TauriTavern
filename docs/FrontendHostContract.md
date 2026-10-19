@@ -27,7 +27,7 @@
 
 页面脚本运行前，宿主已写入 `window.__TAURITAVERN_HOST__`（见 2.2）。
 
-原生 Tauri 的开发态 HTTP 入口会先由 `scripts/tauri-dev-server.mjs` 注入 `src/dev-sw-bootstrap.js`，仅负责让持久 Service Worker registration 与当前 WebView 会话重新绑定，不参与应用模块初始化。浏览器宿主直接使用 HTTP/SSE transport，复用下列应用启动链路，不模拟 Tauri 注入。
+原生 Tauri 开发入口由 `scripts/tauri-dev-server.mjs` 注入 `src/dev-sw-bootstrap.js`，安装和接管机制见[第三方扩展](CurrentState/ThirdPartyExtensions.md)，就绪契约见 2.2。独立 HTTP 宿主直接使用认证资源与 HTTP/SSE transport，不安装该原生开发桥。Studio 嵌入宿主由嵌入方在 `init.js` 前安装[Web Host](CurrentState/WebHost.md)，不与独立 HTTP 入口混用。
 
 1. `src/init.js`：负责最早期的环境标记、可选 perf 开关与动态 import。
 2. `src/tauri-main.js`：薄入口，仅调用 `bootstrapTauriMain()`。
@@ -36,19 +36,24 @@
 
 ### 2.2 就绪信号（Public/Project）
 
+- `window.__TAURITAVERN_DEV_SW_READY__ : Promise<void> | undefined`（Project）
+  - 开发资源桥引导脚本在安装资源桥时同步发布；SW 接管页面后 resolve，注册失败则 reject。
+  - 以下情况不发布，应用照常启动：打包运行（没有注入）；移动端 dev（经 app 协议加载，资源由宿主提供）；WebView 不支持 SW（会警告开发资源不可用）；旧会话正在注销并重载。
+  - `init.js` 在导入 `lib.js` 前等待它。
 - `window.__TAURITAVERN_MAIN_READY__ : Promise<void>`
-  - 由 `src/tauri/main/bootstrap.js` 写入；resolve 只表示宿主初始化成功。拒绝会停止启动并显示独立于主应用的错误面板与重载入口，不留无限加载遮罩。
-  - 在 Tauri runtime 下，resolve 前必须完成 Rust `BackendReadiness` 等待，确保首批依赖 `AppState` 的命令不靠 “state not managed” 文本重试作为正常控制流。浏览器宿主须先取得页面 session 并收到匹配的 SSE `ready` 帧；HTTP 服务在接受连接前已完成后端装配。
+  - 由 `src/tauri/main/bootstrap.js` 在主应用模块加载前同步写入；resolve 只表示宿主初始化成功，失败时 reject 并由调用者传播。独立 HTTP 的拒绝会停止启动并显示独立于主应用的错误面板与重载入口，不留无限加载遮罩。
+  - 共同启动顺序是先安装后端错误监听、再声明消费就绪、最后 `invoke('wait_for_backend_ready')`。原生必须等 Rust `BackendReadiness`，不靠 “state not managed” 文本重试。HTTP 首次 listen/invoke 由唯一 transport.start 等待真实页面 session 与匹配 SSE ready，之后才发送命令；服务器在监听前已经完成后端装配。Studio 的就绪由其独立嵌入适配器提供，不替代上述 HTTP 握手。
 - `window.__TAURITAVERN_PERF_READY__ : Promise<unknown> | undefined`
   - 仅在 perf-hud 启用时存在（见第 5 节）。
 - `globalThis.__TAURITAVERN_PERF_ENABLED__ : boolean`
   - 由 `src/init.js` 在动态 import 前写入；`bootstrap` 会优先读取它（避免重复计算/时序差异）。
-- `window.__TAURI_RUNNING__ : true`（仅原生 Tauri）
-  - 由 `src/init.js` 在非 web 宿主写入；用于桥接层尽早判断 Tauri 环境（避免移动端注入时序 race）。浏览器宿主不写入该标记，也不伪造 `__TAURI__` / `__TAURI_INTERNALS__`。
+- `window.__TAURI_RUNNING__ : true`（原生或 Studio 嵌入前端）
+  - 由 `src/init.js` 在非 HTTP 宿主写入，仅为对外识别标记，内部不读取它。HTTP `browser/web` 不写此标记，也不伪造 `__TAURI__` / `__TAURI_INTERNALS__`。
 - `window.__TAURITAVERN_HOST__ : { platform, kind }`（Project）
-  - 宿主身份在页面脚本之前写入顶层 frame，对象冻结。原生身份由 Rust 编译目标生成；HTTP 宿主注入固定 `{ platform: 'browser', kind: 'web' }`，与浏览器所在操作系统或屏幕形态无关。
-  - `platform`：`'windows' | 'macos' | 'linux' | 'android' | 'ios' | 'ohos' | 'browser'`；`kind`：`'desktop' | 'mobile' | 'web'`。原生的 `desktop` / `mobile` 与 Rust 编译条件同源。
-  - 第一方代码统一通过 [host-identity.js](../src/scripts/util/host-identity.js) 读取；其中 `isWebHost()` 只匹配完整 `browser/web` 身份，非项目环境缺少身份时返回 `false`，bridge 重导出该 helper。其他身份读取器缺少身份时抛错。见 [FrontendGuide §2.1](FrontendGuide.md#21-宿主身份)。
+  - 宿主在页面脚本前写入 TT 页面的 `window`，对象冻结。原生身份由 Rust 按编译目标生成；HTTP 固定 `{ platform: 'browser', kind: 'web' }`，与浏览器所在操作系统无关。
+  - `platform`：`'windows' | 'macos' | 'linux' | 'android' | 'ios' | 'ohos' | 'browser'`；`kind`：`'desktop' | 'mobile' | 'web'`。原生 desktop/mobile 与 Rust 编译条件同源；Studio identity 由嵌入方声明目标，不能用来推断 HTTP 的原生能力。
+  - 第一方只通过 [host-identity.js](../src/scripts/util/host-identity.js) 读取；`isWebHost()` 只匹配完整 browser/web，缺少身份时返回 false；其余身份读取器缺少身份时抛错。
+  - `tauri-bridge.js` 在一处延迟选择宿主接口：原生/Studio 提供的 `__TAURI__` ABI，或 `src/web/host.js` 的私有 HTTP adapter。后者委托真实 transport，不将 plugin 命令映射成服务器权限；扫码缺席是合法状态，未支持的窗口/路径转换明确拒绝。Studio 的安装/后端/store 接口见 [Web Host](CurrentState/WebHost.md)，不加载到独立 HTTP 入口。
 
 ---
 
@@ -205,7 +210,7 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
 
 > 注意：`window.__TAURITAVERN__` 是“平台 ABI”，应保持**小而稳定**；不要把内部实现对象整个暴露出去。
 
-### 3.7 ChatSurface participant（Project Contract）
+### 3.7 ChatSurface（Project Contract）
 
 - `window.__TAURITAVERN__.api.chatSurface`
   - 当前是实验性的 Project Contract，尚未作为 Public Contract 稳定发布。
@@ -214,6 +219,10 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
   - participant 必须显式声明协议版本；hook 返回同步 disposer，宿主用 `AbortSignal` 表达 mount/content/runtime 三种真实寿命。
   - mount/remount/content lifecycle 不得伪装为 SillyTavern 消息业务事件。
   - 完整协议与 raw API 接入示例见 `docs/API/ChatSurface.md`。
+
+- `SillyTavern.getContext().scrollChatSurfaceTo(options: ScrollToOptions): void`
+  - TT 在上游 `src/scripts/st-context.js` 中增加的函数，属于 Project Contract，目前供第一方助手使用。
+  - 效果等同于对主页面 `#chat` 调用 `scrollTo(options)`。`#chat` 的原生滚动只由 ChatSurface 写入，所以要经由它，不直接操作 DOM。
 
 ---
 
@@ -228,7 +237,7 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
 
 拦截生效条件（见 `src/tauri/main/bootstrap.js`）：
 
-- 仅在 **项目宿主**启用（原生 Tauri 或明确的 browser/web 身份，`bootstrapTauriMain()` 使用 `isProjectHost()` 早退保护）。
+- 由宿主启动链路安装；`bootstrapTauriMain()` 只防止重复安装，不再通过运行时探测静默跳过宿主初始化。
 - 仅拦截 **same-origin** 请求（包含被 patch 的同源 iframe/window）。
 - 是否接管由 `router.canHandle(method, pathname)` 决定（仅看 `url.pathname`）。
 
@@ -266,7 +275,7 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
 
 - `/api/*`：应用核心 API（settings/chats/characters/ai/worldinfo…）
   - 用户设定沿用上游 settings 数据形状；列表刷新不写入资料，单项保存失败不影响其他修改。
-  - `/api/settings/save` 接收完整 JSON。读取与保存确认返回 `tauritavern_settings_revision`；调用方将其作为不透明令牌，以 JSON 编码经 `X-TauriTavern-Settings-Revision` 回传。过期令牌返回 409，未携带时仍可覆盖保存。Persona 修改独立确认成败。
+  - `/api/settings/save` 接收设置 JSON：Persona 注册表按 ID 增量提交，提及的 ID 替换整条记录，未提及的不删除；其余设置是完整快照。读取与保存确认返回 `tauritavern_settings_revision`；调用方将其作为不透明令牌，以 JSON 编码经 `X-TauriTavern-Settings-Revision` 回传。过期令牌返回 409，未携带时仍可覆盖保存。Persona 修改独立确认成败。
   - `/api/settings/get` 保持上游响应形状，`settings` 仍为 JSON 字符串；启动读取与应用顺序见 [StartupOptimization §4](CurrentState/StartupOptimization.md#4-设置与-bootstrap-元数据读取)。
 - `/api/backends/chat-completions/generate` 的流式响应由 Rust 进程内会话持有生成任务、移动端 best-effort 后台执行租约与未确认事件；前端通过单调递增的 `after_seq` 消费并确认，原生 WebView 暂停后可在同一 Rust 进程内重放缺失事件。单次读取失败会使用相同 cursor 重试一次，第二次失败才关闭会话。后台租约失败或到期不拥有生成终止权；该保证不跨进程重启，也不伪装成上游 provider 的 HTTP 断点续传。浏览器的同页 SSE 短断线会在有界回放窗口和 10 分钟恢复期内重连，页面 AI 会话不立即销毁；HTTP invoke 的未知结果不自动重放。服务器重启、过期或回放 gap 创建新页时，旧 AI/commit/file handle 失效，不承诺跨 session 延续；见 [BrowserHost](CurrentState/BrowserHost.md)。
 - `/css/user.css`：用户自定义 CSS 覆盖文件（数据目录 `_css/user.css`）

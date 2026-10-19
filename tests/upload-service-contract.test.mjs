@@ -37,14 +37,18 @@ function stagingHost(encoding, failChunkOffset) {
     return { service, filePath, chunks, discarded };
 }
 
-test('mobile uploads preserve bytes across IPC chunks and own their staged copies', async () => {
+test('mobile and browser uploads preserve bytes across chunks and own their staged copies', async () => {
     const bytes = Uint8Array.of(0, 255, 128, 64, 1, 2, 3, 4, 5, 6);
-    for (const [identity, encoding] of [[HOSTS.android, 'base64'], [HOSTS.ios, undefined]]) {
+    for (const [identity, encoding] of [
+        [HOSTS.android, 'base64'],
+        [HOSTS.ios, undefined],
+        [{ platform: 'browser', kind: 'web' }, undefined],
+    ]) {
         const restore = installHostIdentity(identity);
         try {
             const { service, filePath, chunks, discarded } = stagingHost(encoding);
             const blob = new Blob([bytes], { type: 'image/png' });
-            // A mobile picker's scoped path cannot substitute for an owned copy.
+            // Picker-provided local paths cannot substitute for an owned host copy.
             Object.defineProperty(blob, 'path', { value: '/private/scoped/avatar.png' });
             const file = await service.materializeUploadFile(blob, { kind: 'avatar', preferredName: 'portrait.png' });
 

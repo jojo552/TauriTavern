@@ -6,7 +6,7 @@ import { createBrowserRuntime } from './runtime.mjs';
 const settingsTemplate = readFileSync(new URL('../../src/scripts/extensions/quick-reply/html/settings.html', import.meta.url), 'utf8');
 
 async function withQuickReplies(run) {
-    const { window, getModule, load } = createBrowserRuntime();
+    const { window, getModule, load } = await createBrowserRuntime();
     try {
         const main = (await load('script.js')).namespace;
         const extensions = getModule('scripts/extensions.js').namespace;

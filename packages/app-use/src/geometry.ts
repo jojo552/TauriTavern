@@ -1,7 +1,7 @@
-import { documentWindow } from './document';
-import type { DocumentScope } from './document';
-import { isSensitive, preview } from './semantics';
-import type { Semantics } from './semantics';
+import { documentWindow } from './document.ts';
+import type { DocumentScope } from './document.ts';
+import { preview } from './semantics.ts';
+import type { Semantics } from './semantics.ts';
 
 export type InteractionPoint = { x: number; y: number };
 type Bounds = { left: number; right: number; top: number; bottom: number };
@@ -66,7 +66,7 @@ function findMissedHit(point: InteractionPoint, mappings: FrameMapping[], target
 
 function identify(element: Element, semantics: Semantics): string {
     // A hit may belong to an omitted region; diagnostics must not disclose its contents.
-    if (!semantics.isWithinObservedContent(element) || isSensitive(element)) return `${element.localName} (content omitted)`;
+    if (!semantics.isWithinObservedContent(element) || semantics.isSensitive(element)) return `${element.localName} (content omitted)`;
     const { name } = semantics.describeElement(element);
     const id = element.id ? ` id=${JSON.stringify(preview(element.id).value)}` : '';
     return `${element.localName}${id}${name ? ` ${JSON.stringify(name)}` : ''}`;
@@ -92,14 +92,14 @@ function describeMissedHit({ point, document: doc, hit }: MissedHit, semantics: 
 function frameMapping(frame: HTMLIFrameElement): FrameMapping {
     const view = documentWindow(frame.ownerDocument);
     // Bounding rectangles provide a reliable mapping for translation and positive axis-aligned scale.
+    // Perspective alone leaves points on the z=0 plane unchanged.
     // Reject other transforms instead of using an approximate point to bypass an outer obstruction.
     for (let ancestor: Element | null = frame; ancestor; ancestor = ancestor.parentElement) {
         const style = view.getComputedStyle(ancestor);
         const matrix = new view.DOMMatrixReadOnly(style.transform === 'none' ? undefined : style.transform);
         const rotated = style.rotate && style.rotate !== 'none' && Number.parseFloat(style.rotate) !== 0;
         const flipped = style.scale && style.scale !== 'none' && style.scale.split(/\s+/).some(value => Number(value) <= 0);
-        const perspective = style.perspective && style.perspective !== 'none';
-        if (!matrix.is2D || matrix.b !== 0 || matrix.c !== 0 || matrix.a <= 0 || matrix.d <= 0 || rotated || flipped || perspective) {
+        if (!matrix.is2D || matrix.b !== 0 || matrix.c !== 0 || matrix.a <= 0 || matrix.d <= 0 || rotated || flipped) {
             throw new Error('No action was performed: this embedded page has a rotation, skew, or 3D transform that app.interact cannot map reliably. Use app.evaluate with a known API for this control.');
         }
     }

@@ -34,8 +34,9 @@
 ### 2.2 Bootloader：分层 import + Android import 重试
 
 - `src/init.js`
-  - 原生宿主设置 `window.__TAURI_RUNNING__ = true`；browser/web 不伪造原生标记。两者计算 `globalThis.__TAURITAVERN_PERF_ENABLED__`
-  - 依次加载模块；原生宿主使用 `importWithRetry()`，浏览器 Host Kernel 直接 import，并先等待真实 session/SSE ready：
+  - 原生/Studio 设置对外标记 `window.__TAURI_RUNNING__ = true`；HTTP browser/web 不写原生标记。各宿主计算 `globalThis.__TAURITAVERN_PERF_ENABLED__`
+  - 等待[可选的原生开发资源桥就绪信号](../FrontendHostContract.md#22-就绪信号publicproject)，HTTP 生产入口不安装该桥
+  - 依次加载模块；原生/Studio 保留 `importWithRetry()`，HTTP 的 Host Kernel 直接 import 并先等待真实 session/SSE ready（不重试有未知副作用的模块初始化）：
     1) `./lib.js`（静态依赖 `src/dist/lib.core.bundle.js`）
     2) `./tauri-main.js`（安装 Host Kernel：路由/拦截器/ABI）
     3) `./script.js`（SillyTavern 主前端）
@@ -53,7 +54,6 @@
     - same-origin iframe/window 的补丁（保证扩展/脚本在 iframe 内也能命中路由/下载桥）
   - 设置 readiness：
     - `window.__TAURITAVERN_MAIN_READY__ = readyPromise`
-    - 前端用 `waitForTauriMainReady()` 等它，确保首次 `/api/*` 调用前 Host 已就绪，且 Rust `BackendReadiness` 已完成。
   - Host Ready 后只加载不会传递导入主应用的模块。设置入口先注册同步/配对监听，事件呈现与设置 UI 共用一个 `APP_READY` Promise；请求参数面板本身依赖主应用，直接在 `APP_READY` 后导入。
 
 ### 2.4 前端启动编排：Shell → Core → Full（保持 APP_READY 语义）
@@ -64,7 +64,7 @@
     - 各阶段通过 `setStage(stage, message, progress)` 推进开屏进度并更新阶段文字
     - 初始化纯前端 UI/DOM handler、基础 patch（不会做 `/api/*`）
   - **Core 阶段**
-    - `await waitForTauriMainReady({ failFast: true })`：保证 Host 拦截器与 Rust backend readiness 就绪
+    - `await window.__TAURITAVERN_MAIN_READY__`：保证 Host 拦截器与 Rust backend readiness 就绪，失败直接传播
     - `/csrf-token` + 并发启动 `/api/bootstrap` 与 `/api/settings/get`
     - `initSecrets()` + `primeSecretStateSnapshot(...)` + `readSecretState()`
     - 默认 slash commands、模型/设置等核心模块初始化
@@ -97,8 +97,8 @@
 ### 3.2 Host 就绪（拦截器、路由与 BackendReadiness）
 
 - `window.__TAURITAVERN_MAIN_READY__`：在 `src/tauri/main/bootstrap.js` 设置
-- `waitForTauriMainReady()`：前端轮询等待该 promise 注册并 resolve（`src/scripts/extensions/runtime/tauri-ready.js`）
-- Tauri runtime 下，Host 初始化链会在任何需要 `AppState` 的首批工作前调用 `wait_for_backend_ready`，避免依赖 Tauri 的 “state not managed” 错误文本重试。
+- 主应用在 Core 阶段等待它一次，扩展发现与激活都在之后；第一方扩展通过 `window.__TAURITAVERN__.ready` 等待同一个 Promise。失败直接传播，见[就绪契约](../FrontendHostContract.md#22-就绪信号publicproject)。
+- Host 初始化链会在任何需要 `AppState` 的首批工作前调用 `wait_for_backend_ready`，避免依赖 Tauri 的 “state not managed” 错误文本重试。
 
 ---
 

@@ -1,11 +1,25 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import { Window } from 'happy-dom';
-import { installHostIdentity, HOSTS } from '../helpers/host-identity.mjs';
+import { HOSTS } from '../helpers/host-identity.mjs';
+import { createWebHostFixture } from './web-host-fixture.mjs';
 
 const root = fileURLToPath(new URL('../../src/', import.meta.url));
+const defaultSettings = JSON.parse(readFileSync(new URL('../../default/content/settings.json', import.meta.url), 'utf8'));
+const defaultTheme = JSON.parse(readFileSync(new URL('../../default/content/themes/Dark Lite.json', import.meta.url), 'utf8'));
+const extensions = readdirSync(path.join(root, 'scripts/extensions'))
+    .filter(name => existsSync(path.join(root, 'scripts/extensions', name, 'manifest.json')))
+    .map(name => ({ name, type: 'system' }));
+extensions.push({ name: 'third-party/web-host-fixture', type: 'local' });
+
+function resourcePath(pathname) {
+    const prefix = '/scripts/extensions/third-party/';
+    return pathname.startsWith(prefix)
+        ? fileURLToPath(new URL(`./fixtures/extensions/${pathname.slice(prefix.length)}`, import.meta.url))
+        : path.join(root, pathname);
+}
 
 // These tests drive the application through happyDOM.waitUntilComplete(), which drains its
 // pending timers in real time: one navigation run schedules ~57 s of nominal delay, mostly
@@ -43,10 +57,33 @@ export function createPaginationWaiter(window) {
     };
 }
 
-export function createBrowserRuntime() {
+export function captureBrowserErrors(window) {
+    const errors = [];
+    const failed = Promise.withResolvers();
+    const record = error => { errors.push(error); failed.reject(error); };
+    window.addEventListener('error', event => record(event.error ?? event.message));
+    window.addEventListener('unhandledrejection', event => record(event.reason));
+    window.toastr.error = (...args) => record(new Error(args.join(' ')));
+    return { errors, failed: failed.promise };
+}
+
+// A custom installer runs before any application module, so HTTP tests use the same DOM/ESM
+// runtime without installing Studio's frozen identity or its __TAURI__ implementation first.
+export async function createBrowserRuntime({
+    identity = HOSTS.windows,
+    fixture = createWebHostFixture(defaultSettings, defaultTheme, extensions),
+    installHost,
+} = {}) {
     const window = new Window({
         url: 'http://localhost/',
-        settings: { disableCSSFileLoading: true, disableJavaScriptFileLoading: true },
+        settings: {
+            disableCSSFileLoading: true, disableJavaScriptFileLoading: true,
+            // asset-loader explicitly imports modules through this runtime's VM loader.
+            // Acknowledge its DOM tags while CSS remains disabled.
+            handleDisabledFileLoadingAsSuccess: true,
+            // Application lifetime intervals must not keep waitUntilComplete() running forever.
+            timer: { maxIntervalIterations: 1 },
+        },
     });
     // happy-dom #2182: Node's getter must work on subclasses, as it does in browsers.
     // DOMPurify reads this getter directly to avoid DOM clobbering.
@@ -65,6 +102,8 @@ export function createBrowserRuntime() {
     delete window.Element.prototype.toString;
     window.document.write(readFileSync(path.join(root, 'index.html'), 'utf8')
         .replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, ''));
+    // CSS loading is disabled; the input editor still needs resolved text metrics.
+    window.document.getElementById('send_textarea').style.cssText = 'line-height:20px;font-size:16px;padding:0px';
     for (const file of ['jquery-3.5.1.min.js', 'jquery-ui.min.js', 'jquery.transit.min.js',
         'jquery-cookie-1.4.1.min.js', 'cropper.min.js', 'jquery-cropper.min.js',
         'toastr.min.js', 'select2.min.js', 'pagination.js']) {
@@ -73,7 +112,6 @@ export function createBrowserRuntime() {
     // Exercise actual module evaluation without starting chat/settings IO through DOM-ready callbacks.
     window.jQuery.holdReady(true);
     window.structuredClone = structuredClone;
-    installHostIdentity(HOSTS.windows, window);
     // happy-dom's TransformStream is a Node Transform, not the Web Streams constructor.
     window.TransformStream = TransformStream;
     window.TextDecoderStream = TextDecoderStream;
@@ -89,39 +127,19 @@ export function createBrowserRuntime() {
     const scheduleTimeout = window.setTimeout.bind(window);
     window.setTimeout = (callback, delay = 0, ...args) =>
         scheduleTimeout(callback, Math.ceil(delay / TIMER_SCALE), ...args);
-    window.fetch = async () => { throw new Error('Unexpected network request'); };
-    window.localStorage.setItem('tt:embeddedRuntimeProfile', 'off');
-    const listeners = new Map();
-    window.__TAURI__ = {
-        core: {
-            async invoke(command, args) {
-                switch (command) {
-                    case 'is_ready': return true;
-                    case 'backend_error_bridge_ready': return [];
-                    case 'wait_for_backend_ready': return;
-                    case 'get_tauritavern_settings': return {
-                        panel_runtime_profile: 'off', embedded_runtime_profile: 'off',
-                        dynamic_theme: { enabled: false, wallpaper_enabled: false },
-                    };
-                    case 'read_frontend_template': return readFileSync(path.join(root, 'scripts/templates', args.name), 'utf8');
-                    default: throw new Error(`Unexpected IPC command: ${command}`);
-                }
-            },
-            convertFileSrc: file => `http://localhost/${file}`,
-        },
-        event: {
-            async listen(name, callback) {
-                listeners.set(name, callback);
-                return () => listeners.delete(name);
-            },
-        },
-        window: { getCurrentWindow: () => ({}) },
+    window.fetch = async input => {
+        const url = new URL(input, window.location.href);
+        const file = url.protocol === 'file:' ? fileURLToPath(url) : resourcePath(decodeURIComponent(url.pathname));
+        try { return new window.Response(readFileSync(file)); }
+        catch (error) {
+            if (error.code === 'ENOENT') return new window.Response('Not found', { status: 404 });
+            throw error;
+        }
     };
-
     const modules = new Map();
     let imports = Promise.resolve();
     const resolve = (specifier, owner) => specifier.startsWith('/')
-        ? path.join(root, specifier) : fileURLToPath(new URL(specifier, owner.identifier));
+        ? resourcePath(specifier) : fileURLToPath(new URL(specifier, owner.identifier));
     const link = (specifier, owner) => getModule(resolve(specifier, owner));
 
     function getModule(file) {
@@ -169,5 +187,13 @@ export function createBrowserRuntime() {
         return main;
     }
 
-    return { window, listeners, getModule, load, startHost, initializeChatRendering };
+    const fetchResource = window.fetch.bind(window);
+    let host;
+    if (installHost) {
+        host = await installHost({ window, identity, fixture, load, fetchResource });
+    } else {
+        const webHost = await load('tauri/web-host/install.js');
+        host = webHost.namespace.installWebHost({ identity, backend: fixture.backend, store: fixture.store });
+    }
+    return { window, host, fixture, getModule, load, startHost, initializeChatRendering };
 }

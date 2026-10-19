@@ -19,8 +19,13 @@ if (!binary || !output) {
 // Every bundle the frontend build owns, derived from the build itself rather than a second list.
 // Check them all before touching the output: a partial build must not become a release.
 const bundles = createRspackConfigs('production').flatMap(config =>
-    Object.keys(config.entry).map(name =>
-        path.join(config.output.path, config.output.filename.replace('[name]', name))));
+    Object.keys(config.entry).flatMap(name => {
+        const filenames = [config.output.filename];
+        // An explicit CSS output is part of the build contract too (the app-use
+        // cursor now ships in the In-App Assistant's emitted stylesheet).
+        if (config.output.cssFilename) filenames.push(config.output.cssFilename);
+        return filenames.map(filename => path.join(config.output.path, filename.replace('[name]', name)));
+    }));
 const missing = [];
 for (const required of [path.resolve(binary), ...bundles]) {
     await fs.access(required).catch(() => missing.push(path.relative(repoRoot, required)));

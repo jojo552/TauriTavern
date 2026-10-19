@@ -1,4 +1,4 @@
-/** Install the native startup fact for a test and restore it during teardown. */
+/** Install a host startup fact for a test and restore it during teardown. */
 export function installHostIdentity(identity = HOSTS.windows, target = globalThis) {
     const previous = Object.getOwnPropertyDescriptor(target, '__TAURITAVERN_HOST__');
     Object.defineProperty(target, '__TAURITAVERN_HOST__', {
@@ -15,6 +15,7 @@ export function installHostIdentity(identity = HOSTS.windows, target = globalThi
 }
 
 export const HOSTS = {
+    browser: { platform: 'browser', kind: 'web' },
     windows: { platform: 'windows', kind: 'desktop' },
     macos: { platform: 'macos', kind: 'desktop' },
     linux: { platform: 'linux', kind: 'desktop' },

@@ -1,7 +1,7 @@
 // @ts-check
 
+import { invoke as invokeHost } from '../../../../tauri-bridge.js';
 import { encodeIpcByteBody } from './ipc-byte-body.js';
-import { invoke as hostInvoke } from '../../../../tauri-bridge.js';
 
 /**
  * @typedef {import('../../context/types.js').TauriInvokeCommand} TauriInvokeCommand
@@ -9,17 +9,8 @@ import { invoke as hostInvoke } from '../../../../tauri-bridge.js';
  */
 
 /** @param {{ safeInvoke?: InvokeFn | undefined; invoke?: InvokeFn | undefined }} [deps] */
-export function createFileStagingService({ safeInvoke, invoke } = {}) {
-    function rawInvoke() {
-        const invokeApi = invoke ?? hostInvoke;
-        if (typeof invokeApi !== 'function') throw new Error('Tauri invoke API is unavailable');
-        return invokeApi;
-    }
-
-    /** @param {TauriInvokeCommand} command @param {any} args */
-    function invokeCommand(command, args) {
-        return (safeInvoke ?? rawInvoke())(command, args);
-    }
+export function createFileStagingService({ safeInvoke, invoke = invokeHost } = {}) {
+    const invokeCommand = safeInvoke ?? invoke;
 
     /** @param {string} filePath */
     async function discardFile(filePath) {
@@ -52,7 +43,7 @@ export function createFileStagingService({ safeInvoke, invoke } = {}) {
                 const end = Math.min(offset + chunkSize, blob.size);
                 const bytes = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
                 const { body, headers } = encodeIpcByteBody(bytes);
-                const nextOffset = await rawInvoke()('stage_file_chunk', body, {
+                const nextOffset = await invoke('stage_file_chunk', body, {
                     headers: { ...headers, 'file-path': encodeURIComponent(filePath), offset: String(offset) },
                 });
                 if (Number(nextOffset) !== end) {

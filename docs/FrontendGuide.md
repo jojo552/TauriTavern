@@ -1,6 +1,6 @@
 # TauriTavern 前端指南
 
-本文档描述 TauriTavern 当前前端（基于 SillyTavern 1.19.0）在原生 Tauri 与 Rust HTTP 浏览器宿主下的集成架构与开发方式。两类宿主复用前端路由、扩展运行时与共享应用服务，不维护第二套业务后端。
+本文档描述 TauriTavern 当前前端（基于 SillyTavern 1.19.0）的宿主集成架构与开发方式。原生 Tauri 与独立 Rust HTTP 宿主复用前端路由、扩展运行时及共享 Rust 应用服务；Studio 嵌入适配器则由嵌入方提供 backend/store，边界见 2.1 和 [Web Host](CurrentState/WebHost.md)，不作为独立 HTTP 服务的替代。
 
 宿主层对外契约清单见：[FrontendHostContract](FrontendHostContract.md)（重构时优先保障其不回归）。浏览器 transport、文件传输与当前能力边界见 [BrowserHost](CurrentState/BrowserHost.md)。
 
@@ -17,7 +17,7 @@
 
 当前前端启动顺序如下（宿主身份在页面脚本运行前已写入，见 2.1）：
 
-1. `src/init.js` 动态导入：`lib.js` -> `tauri-main.js` -> `script.js`
+1. `src/init.js` 等待[可选的开发资源桥就绪信号](FrontendHostContract.md#22-就绪信号publicproject)，随后动态导入：`lib.js` -> `tauri-main.js` -> `script.js`
 2. `src/lib.js` 静态导入 `src/dist/lib.core.bundle.js`，统一提供 ESM 导出；`highlight.js` 通过 `getHljs()` 按需加载
 3. `src/tauri-main.js` 仅调用 `bootstrapTauriMain()`（薄入口）
 4. `src/tauri/main/bootstrap.js` 负责：
@@ -28,12 +28,14 @@
    - 原生宿主安装同源窗口下载桥，暂存后交付；浏览器不安装原生下载拦截，交给浏览器下载，不确认落盘
    - 安装 Tauri mobile 兼容层（runtime polyfills，仅移动端）
    - 为宿主接管的路由响应注入追踪 header：`x-tauritavern-trace-id`
-   - 初始化 bridge 与目录信息
-   - 原生宿主就绪后安装窗口背景发布与移动端窗口快照；浏览器仍安装基于 DOM 视口的 `api.layout`
+   - 安装后端错误桥并通过共同 `invoke('wait_for_backend_ready')` 等待宿主就绪；HTTP 的首次 listen/invoke 自身先等待同一 session/SSE ready，不再维护第二层初始化探测
+   - 原生宿主就绪后安装窗口背景发布与移动端窗口快照；HTTP 浏览器仍安装基于 DOM 视口的 `api.layout`
 
 ### 2.1 宿主身份
 
-宿主身份 `{ platform, kind }` 在页面脚本运行前写入并冻结（契约见 [FrontendHostContract §2.2](FrontendHostContract.md#22-就绪信号publicproject)）：原生 Tauri 由 Rust 编译目标生成；HTTP 宿主明确注入 `{ platform: 'browser', kind: 'web' }`，不伪装成 Tauri runtime，也不写入 `__TAURI_RUNNING__`。前端统一通过 [host-identity.js](../src/scripts/util/host-identity.js) 识别：`hostPlatform()` 返回平台，`isMobileHost()` / `isDesktopHost()` / `isWebHost()` 区分类别；bridge 重导出 `isWebHost()`。后者只匹配完整 `browser/web` 身份，非项目环境缺少身份时返回 `false`；其他身份读取器缺少身份时抛错。测试用 [host identity helper](../tests/helpers/host-identity.mjs) 安装身份。
+宿主身份 `{ platform, kind }` 在页面脚本运行前写入并冻结（契约见 [FrontendHostContract §2.2](FrontendHostContract.md#22-就绪信号publicproject)）：原生 Tauri 由 Rust 按编译目标生成；独立 HTTP 宿主明确注入 `{ platform: 'browser', kind: 'web' }`，不伪装成 Tauri runtime，也不写入 `__TAURI_RUNNING__`。前端统一通过 [host-identity.js](../src/scripts/util/host-identity.js) 读取。`isWebHost()` 只匹配完整 `browser/web` 身份，非项目环境缺少身份时返回 `false`；其他身份读取器缺少身份时抛错。测试用 [host identity helper](../tests/helpers/host-identity.mjs) 安装身份。
+
+[Studio Web Host](CurrentState/WebHost.md) 是另一种嵌入适配器：嵌入方提供目标身份、ST backend 和 store，并安装官方 Tauri-shaped 前端 ABI。它不由 `tt-server` 加载，也不替代独立 HTTP 宿主的共享 Rust 服务。桥接层只在一处延迟选择 native/Studio ABI 或私有 HTTP adapter；应用模块使用同一接口，不重建后端业务或用预览默认状态替代真实数据。
 
 与平台有关的判断，先分清在问什么：
 
@@ -52,6 +54,10 @@
 
 `pnpm run check:platform`（已接入 `pnpm run check`）检查以上约束，报错指向本节。
 
+### 2.2 原生能力
+
+TT 前端总是运行在宿主之上，代码中不判断“是否在 Tauri 中”。应用模块只通过 `tauri-bridge.js` 使用原生能力，能力缺失时由 bridge 在调用处报错。可选插件由对应 service 判断是否可用，例如扫码的 `canScanQrCode()`。唯一例外是 Rust 在 document-start 注入的 Android 语音脚本，见[系统 TTS](CurrentState/TTS.md#接入位置)。`__TAURI_RUNNING__` 只是对外标记，内部不读取。`check:frontend` 检查这条边界。
+
 ## 3. 目录结构（前端集成相关）
 
 ```text
@@ -59,6 +65,7 @@ src/
 ├── tauri-bridge.js            # 低层 bridge：invoke/listen/convertFileSrc
 ├── tauri-main.js              # 共享入口：只做 bootstrap
 ├── web/
+│   ├── host.js                # 私有 HTTP 宿主接口，复用唯一 transport，不安装 Tauri 全局
 │   ├── transport.js           # 浏览器 session / HTTP invoke / SSE / Channel
 │   └── file-transfer.js       # DOM 文件选择与浏览器下载 handoff
 ├── tauri/
@@ -92,7 +99,7 @@ src/
 
 - 组装模块依赖并执行初始化。
 - 确保只 bootstrap 一次。
-- 在 bridge 初始化后再次尝试 patch 运行时补丁（处理加载时序问题）。
+- 在后端就绪后再次尝试 patch 运行时补丁（处理加载时序问题）。
 - 维护对第三方可见的宿主 ABI（`window.__TAURITAVERN__`）与请求追踪 header。
 
 ### 4.2 `context.js`
@@ -221,13 +228,12 @@ src/
 - `src/tauri/main/compat/mobile/mobile-runtime-compat.js`：Tauri mobile 运行时 polyfills（补齐旧 WebView 缺失 JS API）。
 - `src/scripts/util/window-layout.js`：移动端原生窗口快照；`src/scripts/window-backdrop.js`：第一方背景唯一写入与条带发布入口。
 - `src/scripts/extensions/runtime/resource-paths.js`：扩展资源路径规范化与 third-party 判定。
-- `src/scripts/extensions/runtime/tauri-ready.js`：等待 `__TAURITAVERN_MAIN_READY__`，避免 bridge 未就绪时提前加载。
 - `src/scripts/extensions/runtime/third-party-runtime.js`：第三方扩展样式兼容层（legacy WebView 下为样式 URL 附加 `ttCompat=layer`，触发 Rust 端点做 `@layer` 展平；不再走前端预取/Blob 注入）。
 - `src/scripts/extensions/runtime/asset-loader.js`：脚本与样式注入、超时保护、重复注入幂等控制。
 
 ### 7.3 端到端加载链路
 
-1. `loadExtensionSettings()` 先等待 `waitForTauriMainReady()`。
+1. 启动 core 阶段确认宿主就绪后，才开始扩展发现。
 2. 前端通过 `/api/extensions/discover` 获取扩展列表与类型，读取 manifest 并进入 `activateExtensions()`。
 3. 对每个扩展执行 `addExtensionLocale()` + `addExtensionScript()` + `addExtensionStyle()`。
 4. 当扩展为 `third-party/*` 时：

@@ -11,13 +11,12 @@ import { isWebHost } from '../tauri-bridge.js';
 /** @returns {Promise<FileDeliveryResult>} */
 export async function deliverBlob(blob, fileName) {
     const payload = blob instanceof Blob ? blob : new Blob([blob ?? '']);
-    const invoke = window.__TAURI__?.core?.invoke;
-    if (typeof invoke !== 'function') {
+    if (isWebHost()) {
         return createBrowserFileTransfer().downloadBlob(payload, fileName || 'download.bin');
     }
 
     const { safeInvoke } = window.__TAURITAVERN__.invoke;
-    const staging = createFileStagingService({ safeInvoke, invoke });
+    const staging = createFileStagingService({ safeInvoke });
     const path = await staging.stageBlob(payload, { kind: 'export', preferredName: fileName });
     return safeInvoke('deliver_staged_file', { path, fileName });
 }

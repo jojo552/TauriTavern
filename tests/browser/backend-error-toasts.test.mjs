@@ -3,10 +3,10 @@ import test from 'node:test';
 import { createBrowserRuntime } from './runtime.mjs';
 
 test('backend errors wait for the application consumer, deduplicate and render untrusted messages as text', async () => {
-    const { window, listeners, load, startHost } = createBrowserRuntime();
+    const { window, host, load, startHost } = await createBrowserRuntime();
     try {
         await startHost();
-        const emit = message => listeners.get('tauritavern-backend-error')({ payload: { message } });
+        const emit = message => host.emit('tauritavern-backend-error', { message });
         const earlyMarkup = '<img src="test-only" onerror="alert(1)">';
         emit('Early maintenance failure');
         emit('Early maintenance failure');

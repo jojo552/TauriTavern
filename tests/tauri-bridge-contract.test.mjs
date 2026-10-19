@@ -13,7 +13,6 @@ let lastInvokedCommand = null;
 let lastInvokedArgs = null;
 
 global.window = {
-    __TAURI_RUNNING__: true,
     __TAURI__: {
         core: {
             invoke: async (command, args) => {
@@ -89,7 +88,7 @@ test('openDialog contract validation', async (t) => {
 
 for (const authenticationLost of [false, true]) {
 test(`browser recovery stays silent; ${authenticationLost ? 'expired login offers a separate page without discarding content' : 'protocol failure only reports its error'}`, async () => {
-    const { initializeBridge, waitUntilWebConnected, invoke } = await import(pathToFileURL(tauriBridgePath).href + `?authenticationLost=${authenticationLost}`);
+    const { getCsrfToken, waitUntilWebConnected, invoke } = await import(pathToFileURL(tauriBridgePath).href + `?authenticationLost=${authenticationLost}`);
     const keys = ['window', 'document', 'fetch', 'EventSource', 'toastr', 'reportError', 'setTimeout', 'clearTimeout'];
     const previous = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
     const restoreHost = installHostIdentity({ platform: 'browser', kind: 'web' });
@@ -121,13 +120,16 @@ test(`browser recovery stays silent; ${authenticationLost ? 'expired login offer
             }
             assert.equal(url, '/__tt/invoke');
             if (denyAuth) return Response.json({ error: 'Login required' }, { status: 401, headers: { 'x-tt-login-required': '1' } });
-            assert.equal(JSON.parse(init.body).command, 'is_ready');
-            return Response.json(true);
+            assert.equal(JSON.parse(init.body).command, 'wait_for_backend_ready');
+            return Response.json(null);
         };
-        const initial = initializeBridge();
+        const initial = invoke('wait_for_backend_ready');
         const first = await nextSource.promise;
         first.frame({ type: 'ready', sessionId: 'page-1' });
         await initial;
+        assert.equal(await getCsrfToken(), 'csrf-1');
+        assert.equal(globalThis.window.__TAURI__, undefined, 'HTTP uses no Tauri global');
+        assert.equal(globalThis.window.__TAURI_RUNNING__, undefined);
 
         nextSource = Promise.withResolvers();
         first.onerror(); // A background connection loss is recovered, not a user action request.
@@ -148,6 +150,7 @@ test(`browser recovery stays silent; ${authenticationLost ? 'expired login offer
         replacement.frame({ type: 'ready', sessionId: 'page-2' });
         await waitUntilWebConnected();
         assert.deepEqual(warnings, [], 'Successful automatic session replacement is not a reload request');
+        assert.equal(await getCsrfToken(), 'csrf-2', 'CSRF follows the confirmed replacement page');
 
         if (authenticationLost) {
             denyAuth = true;

@@ -5,7 +5,7 @@ import { createBrowserRuntime } from './runtime.mjs';
 // happy-dom has no layout: provide the scrollport geometry and resize delivery,
 // while using the actual application, composer observer, projection and scroll writer.
 test('composer expansion cannot scroll backwards between appending a message and the tail frame', async context => {
-    const { window, load, startHost } = createBrowserRuntime();
+    const { window, load, startHost } = await createBrowserRuntime();
     context.after(() => window.happyDOM.close());
     const observers = [];
     window.ResizeObserver = class {

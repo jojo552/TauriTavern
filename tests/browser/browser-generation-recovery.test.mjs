@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { installHostIdentity } from '../helpers/host-identity.mjs';
+import { readFileSync } from 'node:fs';
+import { HOSTS } from '../helpers/host-identity.mjs';
 import { createBrowserRuntime } from './runtime.mjs';
 
 const FIRST = 'Recovered first half; ';
@@ -48,18 +49,14 @@ function result(stream, withTool = false) {
 }
 
 test('browser generation recovery uses the normal decoder, message finalization and durable chat commit', async (context) => {
-    const { window, getModule, load, startHost } = createBrowserRuntime();
-    window.happyDOM.settings.timer.maxIntervalIterations = 1;
-    window.happyDOM.settings.timer.maxIntervalTime = 0;
+    let window;
+    let httpFetch;
     const payloads = new Map(), readers = new Map(), commits = new Map(), jobs = new Map();
     const calls = [], timeline = [], events = [], warnings = [], errors = [];
     let nextId = 1, finishGate, attachGate, ackError, finishError, sideEffects = 0;
     let webSession;
     const sourceCreated = Promise.withResolvers();
     const sessionClosed = Promise.withResolvers();
-    window.toastr.warning = (...args) => warnings.push(args);
-    window.toastr.error = (...args) => errors.push(args);
-    const nativeInvoke = window.__TAURI__.core.invoke;
 
     function openReader(text) {
         const rid = nextId++;
@@ -73,6 +70,15 @@ test('browser generation recovery uses the normal decoder, message finalization 
         calls.push({ command, args: command === 'append_chat_commit_chunk' ? undefined : plain(args) });
         if (MODEL_STARTS.has(command)) throw new Error('Recovery must never request another model start');
         switch (command) {
+            // Minimal server-owned bootstrap facts; the test never installs Studio or native IPC.
+            case 'wait_for_backend_ready':
+            case 'devlog_append_frontend_logs': return null;
+            case 'backend_error_bridge_ready': return [];
+            case 'get_tauritavern_settings': return {
+                panel_runtime_profile: 'off', embedded_runtime_profile: 'off',
+                dynamic_theme: { enabled: false, wallpaper_enabled: false },
+            };
+            case 'read_frontend_template': return readFileSync(new URL(`../../src/scripts/templates/${args.name}`, import.meta.url), 'utf8');
             case 'chat_history_generation_started':
             case 'chat_history_generation_finished':
             case 'prune_agent_chat_persistent_states': return null;
@@ -83,25 +89,13 @@ test('browser generation recovery uses the normal decoder, message finalization 
                 lines: records(payloads.get(args.fileName)).slice(1).slice(-args.maxLines).map(message => JSON.stringify(message)),
                 cursor: null, hasMoreBefore: false,
             };
-            case 'get_chat_payload_path': return args.fileName;
-            case 'plugin:fs|open': return openReader(payloads.get(args.path));
-            case 'plugin:fs|fstat': return { size: readers.get(args.rid).length };
-            case 'plugin:fs|read': {
-                const remaining = readers.get(args.rid), chunk = remaining.subarray(0, args.len);
-                const bytes = new window.Uint8Array(args.len + 8);
-                bytes.set(chunk);
-                new window.DataView(bytes.buffer).setBigUint64(args.len, BigInt(chunk.length));
-                readers.set(args.rid, remaining.subarray(chunk.length));
-                return bytes;
-            }
             case 'open_chat_reader': return openReader(payloads.get(args.target.fileName));
             case 'read_bytes': {
                 const remaining = readers.get(args.rid), chunk = remaining.subarray(0, 64);
                 readers.set(args.rid, remaining.subarray(chunk.length));
                 return new window.Uint8Array(chunk);
             }
-            case 'close_resource':
-            case 'plugin:resources|close': readers.delete(args.rid); return null;
+            case 'close_resource': readers.delete(args.rid); return null;
             case 'begin_chat_commit': {
                 const sessionId = String(nextId++);
                 commits.set(sessionId, { ...plain(args), frames: [] });
@@ -169,10 +163,9 @@ test('browser generation recovery uses the normal decoder, message finalization 
                 return null;
             }
             case 'cancel_chat_completion_job': throw new Error('Detaching recovery must not cancel the original job');
-            default: return nativeInvoke(command, args, options);
+            default: throw new Error(`Unexpected HTTP command: ${command}`);
         }
     }
-    window.__TAURI__.core.invoke = backend;
 
     class Events {
         constructor(url) {
@@ -183,12 +176,72 @@ test('browser generation recovery uses the normal decoder, message finalization 
         frame(frame) { this.onmessage({ data: JSON.stringify(frame), lastEventId: '' }); }
         close() { this.closed = true; }
     }
-    window.EventSource = Events;
+    const { getModule, load, startHost } = await createBrowserRuntime({
+        identity: HOSTS.browser,
+        installHost({ window: target, identity, fetchResource }) {
+            window = target;
+            Object.defineProperty(window, '__TAURITAVERN_HOST__', { value: Object.freeze({ ...identity }) });
+            window.EventSource = Events;
+            window.toastr.warning = (...args) => warnings.push(args);
+            window.toastr.error = (...args) => errors.push(args);
+            window.happyDOM.settings.timer.maxIntervalTime = 0;
+            httpFetch = async (url, options = {}) => {
+                if (url === '/__tt/auth/status') return window.Response.json({ authenticated: true });
+                if (url === '/__tt/session') {
+                    webSession = { sessionId: 'recovery-page', csrfToken: 'recovery-csrf' };
+                    return window.Response.json(webSession);
+                }
+                if (url === '/__tt/session/close') {
+                    sessionClosed.resolve();
+                    return window.Response.json(null);
+                }
+                if (url === '/__tt/invoke') {
+                    const headers = new window.Headers(options.headers);
+                    assert.equal(headers.get('x-tt-csrf'), webSession.csrfToken);
+                    const binary = headers.get('content-type') === 'application/octet-stream';
+                    const request = binary
+                        ? { command: headers.get('x-tt-command'), args: options.body, sessionId: headers.get('x-tt-session') }
+                        : JSON.parse(options.body);
+                    assert.equal(request.sessionId, webSession.sessionId);
+                    try {
+                        const value = await backend(request.command, request.args, options);
+                        return value instanceof window.Uint8Array
+                            ? new window.Response(value, { headers: { 'content-type': 'application/octet-stream' } })
+                            : window.Response.json(value ?? null);
+                    } catch (error) {
+                        return window.Response.json(error instanceof Error ? { InternalServerError: error.message } : error, { status: 500 });
+                    }
+                }
+                switch (url) {
+                    case '/api/settings/get': return window.Response.json({ result: 'file not find' });
+                    case '/api/settings/save': return window.Response.json({ tauritavern_settings_revision: { token: 'saved' } });
+                    case '/api/characters/merge-attributes':
+                    case '/api/stats/update': return window.Response.json({ ok: true });
+                    case '/api/stats/get': return window.Response.json({});
+                    default:
+                        if (String(url).startsWith('/api/') || String(url).startsWith('/__tt/')) {
+                            throw new Error(`Unexpected HTTP request: ${url}`);
+                        }
+                        return fetchResource(url, options);
+                }
+            };
+            window.fetch = httpFetch;
+        },
+    });
 
     try {
-        // The shared runtime's native bootstrap avoids duplicating a browser boot
-        // fixture. From here on bridge calls use actual browser session/HTTP transport.
-        await startHost();
+        assert.equal(window.__TAURI__, undefined);
+        assert.equal(window.__TAURI_INTERNALS__, undefined);
+        assert.equal(window.__TAURI_RUNNING__, undefined);
+        // The very first bootstrap listener must establish the real HTTP page and await SSE ready.
+        const starting = startHost();
+        const source = await Promise.race([
+            sourceCreated.promise,
+            starting.then(() => assert.fail('HTTP bootstrap must establish SSE before becoming ready')),
+        ]);
+        assert.deepEqual(calls, [], 'No command crosses HTTP before this page receives its SSE ready');
+        source.frame({ type: 'ready', sessionId: source.sessionId });
+        await starting;
         const main = (await load('script.js')).namespace;
         const openai = getModule('scripts/openai.js').namespace;
         const { power_user } = getModule('scripts/power-user.js').namespace;
@@ -203,48 +256,11 @@ test('browser generation recovery uses the normal decoder, message finalization 
         getModule('scripts/macros.js').namespace.initMacros();
         main.setAnimationDuration(0);
 
-        window.fetch = async (url, options = {}) => {
-            if (url === '/__tt/auth/status') return window.Response.json({ authenticated: true });
-            if (url === '/__tt/session') {
-                webSession = { sessionId: 'recovery-page', csrfToken: 'recovery-csrf' };
-                return window.Response.json(webSession);
-            }
-            if (url === '/__tt/session/close') {
-                sessionClosed.resolve();
-                return window.Response.json(null);
-            }
-            if (url === '/__tt/invoke') {
-                const headers = new window.Headers(options.headers);
-                assert.equal(headers.get('x-tt-csrf'), webSession.csrfToken);
-                const binary = headers.get('content-type') === 'application/octet-stream';
-                const request = binary ? { command: headers.get('x-tt-command'), args: options.body, sessionId: headers.get('x-tt-session') } : JSON.parse(options.body);
-                assert.equal(request.sessionId, webSession.sessionId);
-                try {
-                    const value = await backend(request.command, request.args, options);
-                    return value instanceof window.Uint8Array
-                        ? new window.Response(value, { headers: { 'content-type': 'application/octet-stream' } })
-                        : window.Response.json(value ?? null);
-                } catch (error) {
-                    return window.Response.json(error instanceof Error ? { InternalServerError: error.message } : error, { status: 500 });
-                }
-            }
-            switch (url) {
-                case '/api/settings/get': return window.Response.json({ result: 'file not find' });
-                case '/api/settings/save': return window.Response.json({ tauritavern_settings_revision: { token: 'saved' } });
-                case '/api/characters/merge-attributes':
-                case '/api/stats/update': return window.Response.json({ ok: true });
-                case '/api/stats/get': return window.Response.json({});
-                default: throw new Error(`Unexpected HTTP request: ${url}`);
-            }
-        };
+        // Keep settings/stats as this focused test's HTTP fixture rather than entering unrelated routes.
+        window.fetch = httpFetch;
         await main.getSettings();
         getModule('scripts/tauri/setting/settings-persistence.js').namespace.captureSettingsSaveState({}, { token: 'loaded' });
         main.changeMainAPI('openai');
-        installHostIdentity({ platform: 'browser', kind: 'web' }, window);
-        const connecting = getModule('tauri-bridge.js').namespace.initializeBridge();
-        const source = await sourceCreated.promise;
-        source.frame({ type: 'ready', sessionId: source.sessionId });
-        await connecting;
 
         for (const name of ['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED', 'STREAM_TOKEN_RECEIVED', 'GENERATION_STARTED']) {
             main.eventSource.on(main.event_types[name], (...args) => {

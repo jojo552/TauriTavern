@@ -1,349 +1,135 @@
-// Core Tauri bridge for frontend modules.
-
-import { SILLYTAVERN_COMPAT_VERSION } from './compat-version.js';
-import { createWebTransport, WebAuthenticationError } from './web/transport.js';
+// Common host bridge for native Tauri, Studio embeddings and the standalone HTTP host.
 import { isWebHost } from './scripts/util/host-identity.js';
+import { createWebHostApi } from './web/host.js';
 
 export { isWebHost };
 export { WebConnectionError, isWebConnectionError, WebSessionResetError, isWebSessionResetError } from './web/transport.js';
 
-// Explicit web-only recovery for safe read consumers. invoke itself remains single-attempt.
+let webHostApi;
+function getWebHostApi() { return webHostApi ??= createWebHostApi(); }
+function getWebTransport() { return getWebHostApi().transport; }
+
+// Resolve lazily: native injection may complete after early modules have been evaluated.
+// Studio installs the upstream host ABI; HTTP never exposes it as a global Tauri runtime.
+function getHostApi() {
+    if (isWebHost()) return getWebHostApi();
+    return typeof window === 'undefined' ? null : window.__TAURI__ || null;
+}
+
+// Recovery controls belong only to the HTTP page connection. They never replay invoke.
 export function waitUntilWebConnected(options) { return getWebTransport().waitUntilConnected(options); }
 export function recoverWebConnection() { return getWebTransport().recoverConnection(); }
-// Browser host only: revokes this browser's login. The caller leaves the page afterwards.
 export function signOutWebHost() { return getWebTransport().signOut(); }
-
-export function isProjectHost() { return isWebHost() || detectTauriEnv(); }
-
-let webTransport;
-function getWebTransport() {
-    if (!isWebHost()) throw new Error('Web transport requires an explicit browser/web host identity');
-    if (webTransport) return webTransport;
-    // Recoverable disconnects and session replacement are silent, as in Luke. Operations report
-    // their own failures; a stopped transport reports through the shared error channel.
-    webTransport = createWebTransport({
-        onError(error) {
-            if (globalThis.reportError) globalThis.reportError(error);
-            else console.error(error);
-            if (error instanceof WebAuthenticationError) {
-                // Keep this page's unsaved content available. Login in another tab, then reload
-                // through the application's ordinary unsaved-work checks; never replay a write.
-                globalThis.toastr?.warning?.('登录已失效。点击打开登录页；重新登录后，请先复制未保存内容，再刷新本页。', '需要重新登录', {
-                    timeOut: 0, extendedTimeOut: 0,
-                    onclick: () => window.open('/login', '_blank', 'noopener,noreferrer'),
-                });
-            }
-        },
-    });
-    return webTransport;
+export function hostSessionEpoch() { return isWebHost() ? getWebTransport().sessionEpoch() : 0; }
+export function onHostSessionReset(handler) {
+    return isWebHost() ? getWebTransport().onSessionReset(handler) : () => {};
 }
-
-function detectTauriEnv() {
-    if (typeof window === 'undefined') {
-        return false;
-    }
-
-    // __TAURI_RUNNING__ is set in init.js before dynamic imports to avoid
-    // startup races where mobile bridge internals are injected a bit later.
-    return window.__TAURI_RUNNING__ === true
-        || window.__TAURI_INTERNALS__ !== undefined
-        || typeof window.__TAURI__?.core?.invoke === 'function';
-}
-
-export const isTauriEnv = detectTauriEnv();
-
-function getTauri() {
-    if (typeof window === 'undefined') {
-        return null;
-    }
-
-    return window.__TAURI__ || null;
-}
-
-function getInvokeFn() {
-    if (isWebHost()) return getWebTransport().invoke;
-    const fn = getTauri()?.core?.invoke;
-    return typeof fn === 'function' ? fn : null;
+export async function getCsrfToken() {
+    return isWebHost() ? getWebTransport().csrfToken() : 'tauri-dummy-token';
 }
 
 function isPlainObject(value) {
-    if (Object.prototype.toString.call(value) !== '[object Object]') {
-        return false;
-    }
+    if (Object.prototype.toString.call(value) !== '[object Object]') return false;
     const prototype = Object.getPrototypeOf(value);
     return prototype === null || prototype === Object.prototype;
 }
 
 function withTauriArgumentAliases(args) {
-    if (!isPlainObject(args)) {
-        return args;
-    }
-
+    if (!isPlainObject(args)) return args;
     const aliased = { ...args };
     for (const [key, value] of Object.entries(args)) {
-        if (!key.includes('_')) {
-            continue;
-        }
-
+        if (!key.includes('_')) continue;
         const camelCaseKey = key.replace(/_+([a-zA-Z0-9])/g, (_, char) => char.toUpperCase());
-        if (!Object.prototype.hasOwnProperty.call(aliased, camelCaseKey)) {
-            aliased[camelCaseKey] = value;
-        }
+        if (!Object.prototype.hasOwnProperty.call(aliased, camelCaseKey)) aliased[camelCaseKey] = value;
     }
-
     return aliased;
 }
 
 export const invoke = (...args) => {
-    const fn = getInvokeFn();
-    if (typeof fn !== 'function') {
-        throw new Error('Tauri invoke is unavailable');
-    }
-
-    if (args.length === 2 && isPlainObject(args[1])) {
-        return fn(args[0], withTauriArgumentAliases(args[1]));
-    }
-
+    const fn = getHostApi()?.core?.invoke;
+    if (typeof fn !== 'function') throw new Error('Tauri invoke is unavailable');
+    if (args.length === 2 && isPlainObject(args[1])) return fn(args[0], withTauriArgumentAliases(args[1]));
     return fn(...args);
 };
 
 function getHostSafeInvoke() {
-    if (typeof window === 'undefined') {
-        return null;
-    }
-
+    if (typeof window === 'undefined') return null;
     const fn = window.__TAURITAVERN__?.invoke?.safeInvoke;
     return typeof fn === 'function' ? fn : null;
 }
 
 async function invokeWithHostNormalization(command, args) {
     const safeInvoke = getHostSafeInvoke();
-    if (safeInvoke) {
-        return safeInvoke(command, args);
-    }
-
+    if (safeInvoke) return safeInvoke(command, args);
     return args === undefined ? invoke(command) : invoke(command, args);
 }
 
 export const listen = (...args) => {
-    if (isWebHost()) return getWebTransport().listen(...args);
-    const fn = getTauri()?.event?.listen;
-    if (typeof fn !== 'function') {
-        throw new Error('Tauri listen is unavailable');
-    }
+    const fn = getHostApi()?.event?.listen;
+    if (typeof fn !== 'function') throw new Error('Tauri listen is unavailable');
     return fn(...args);
 };
 
-// Project lifecycle: a short SSE reconnect keeps the epoch; a new server page invalidates
-// resources and lets declarative consumers rebuild their confirmed registrations.
-export function hostSessionEpoch() { return isWebHost() ? getWebTransport().sessionEpoch() : 0; }
-export function onHostSessionReset(handler) {
-    return isWebHost() ? getWebTransport().onSessionReset(handler) : () => {};
-}
-
 export function createChannel(onmessage) {
-    if (isWebHost()) return getWebTransport().createChannel(onmessage);
-    const Channel = getTauri()?.core?.Channel;
-    if (typeof Channel !== 'function') {
-        throw new Error('Tauri Channel is unavailable');
-    }
-
+    const Channel = getHostApi()?.core?.Channel;
+    if (typeof Channel !== 'function') throw new Error('Tauri Channel is unavailable');
     return new Channel(onmessage);
 }
 
+export function getCurrentWindow() {
+    const currentWindow = getHostApi()?.window?.getCurrentWindow;
+    if (typeof currentWindow !== 'function') throw new Error('Host window API is unavailable');
+    return currentWindow();
+}
+
+// An optional scanner can be absent; querying it must not claim the capability exists.
+export function getBarcodeScanner() { return getHostApi()?.barcodeScanner; }
+
 export const convertFileSrc = (path, protocol = 'asset') => {
-    const fn = getTauri()?.core?.convertFileSrc;
-    if (typeof fn !== 'function') {
-        throw new Error('Tauri convertFileSrc is unavailable');
-    }
+    const fn = getHostApi()?.core?.convertFileSrc;
+    if (typeof fn !== 'function') throw new Error('Tauri convertFileSrc is unavailable');
     return fn(path, protocol);
 };
 
-export function isTauri() {
-    return detectTauriEnv();
-}
-
-export async function initializeBridge() {
-    if (isWebHost()) {
-        await getWebTransport().start();
-        const ready = await invoke('is_ready');
-        if (ready !== true) throw new Error('Web backend is not ready');
-        return true;
-    }
-    const invokeFn = getInvokeFn();
-    if (!invokeFn) {
-        return false;
-    }
-
-    try {
-        return await invokeFn('is_ready');
-    } catch (error) {
-        console.error('Failed to initialize Tauri bridge:', error);
-        return false;
-    }
-}
-
-export async function getCsrfToken() {
-    if (isWebHost()) return getWebTransport().csrfToken();
-    return 'tauri-dummy-token';
-}
-
-export async function initializeApp() {
-    return initializeBridge();
-}
-
-export async function getVersion() {
-    const invokeFn = getInvokeFn();
-    if (!invokeFn) {
-        const response = await fetch('/version');
-        return response.json();
-    }
-
-    return invokeFn('get_version');
-}
-
-export async function getClientVersion() {
-    const invokeFn = getInvokeFn();
-    if (!invokeFn) {
-        const response = await fetch('/version');
-        return response.json();
-    }
-
-    try {
-        return await invokeFn('get_client_version');
-    } catch (error) {
-        console.error('Error getting client version from Tauri backend:', error);
-        const version = await invokeFn('get_version');
-        return {
-            agent: `SillyTavern:${SILLYTAVERN_COMPAT_VERSION}:TauriTavern`,
-            pkgVersion: SILLYTAVERN_COMPAT_VERSION,
-            tauriVersion: version,
-            gitRevision: null,
-            gitBranch: null,
-            defaultUpdateChannel: 'stable',
-        };
-    }
-}
-
-export async function checkForUpdate(channel) {
-    return invokeWithHostNormalization('check_for_update', { channel });
-}
-
-export async function getTauriTavernSettings() {
-    const invokeFn = getInvokeFn();
-    if (!invokeFn) {
-        throw new Error('Tauri invoke is unavailable');
-    }
-
-    return invokeFn('get_tauritavern_settings');
-}
-
-export async function getChatBackupStorageStats() {
-    const invokeFn = getInvokeFn();
-    if (!invokeFn) {
-        throw new Error('Tauri invoke is unavailable');
-    }
-
-    return invokeFn('get_chat_backup_storage_stats');
-}
+export async function getClientVersion() { return invoke('get_client_version'); }
+export async function checkForUpdate(channel) { return invokeWithHostNormalization('check_for_update', { channel }); }
+export async function getTauriTavernSettings() { return invoke('get_tauritavern_settings'); }
+export async function getChatBackupStorageStats() { return invoke('get_chat_backup_storage_stats'); }
 
 export async function updateTauriTavernSettings(dto) {
-    if (!isPlainObject(dto)) {
-        throw new Error('Invalid TauriTavern settings DTO');
-    }
-
+    if (!isPlainObject(dto)) throw new Error('Invalid TauriTavern settings DTO');
     return invokeWithHostNormalization('update_tauritavern_settings', { dto });
 }
 
-export async function getRuntimePaths() {
-    const invokeFn = getInvokeFn();
-    if (!invokeFn) {
-        throw new Error('Tauri invoke is unavailable');
-    }
-
-    return invokeFn('get_runtime_paths');
-}
+export async function getRuntimePaths() { return invoke('get_runtime_paths'); }
 
 export async function setDataRoot(dataRoot) {
-    if (typeof dataRoot !== 'string' || dataRoot.trim() === '') {
-        throw new Error('Invalid data root path');
-    }
+    if (typeof dataRoot !== 'string' || dataRoot.trim() === '') throw new Error('Invalid data root path');
     return invokeWithHostNormalization('set_data_root', { data_root: dataRoot });
 }
 
 export async function openDialog(options = {}) {
-    const invokeFn = getInvokeFn();
-    if (!invokeFn) {
-        throw new Error('Tauri invoke is unavailable');
-    }
-
-    if (!isPlainObject(options)) {
-        throw new Error('Invalid dialog options: expected an object');
-    }
-
+    if (!isPlainObject(options)) throw new Error('Invalid dialog options: expected an object');
     Object.freeze(options);
-
     return invokeWithHostNormalization('plugin:dialog|open', { options });
 }
 
 export function writeClipboardText(text) {
-    if (isWebHost()) {
-        if (typeof navigator.clipboard?.writeText !== 'function') {
-            throw new Error('Browser clipboard requires a secure context and clipboard permission');
-        }
-        return navigator.clipboard.writeText(text);
-    }
+    const host = getHostApi();
+    if (host?.writeClipboardText) return host.writeClipboardText(text);
     return invoke('plugin:clipboard-manager|write_text', { text });
 }
 
 function normalizeExternalUrl(url) {
     const value = String(url instanceof URL ? url.href : url ?? '').trim();
-    if (!value) {
-        throw new Error('External URL is required');
-    }
-
-    try {
-        return new URL(value, window.location.href).toString();
-    } catch {
-        throw new Error(`Invalid external URL: ${value}`);
-    }
+    if (!value) throw new Error('External URL is required');
+    try { return new URL(value, window.location.href).toString(); }
+    catch { throw new Error(`Invalid external URL: ${value}`); }
 }
 
 export async function openExternalUrl(url, openWith) {
     const href = normalizeExternalUrl(url);
-    const invokeFn = getInvokeFn();
-
-    if (invokeFn && !isWebHost()) {
-        return invokeFn('plugin:opener|open_url', {
-            url: href,
-            with: openWith,
-        });
-    }
-
-    const openedWindow = typeof window.open === 'function'
-        ? window.open(href, '_blank', 'noopener,noreferrer')
-        : null;
-
-    if (openedWindow) {
-        return;
-    }
-
-    if (typeof window.location?.assign === 'function') {
-        window.location.assign(href);
-        return;
-    }
-
-    throw new Error('Unable to open external URL');
-}
-
-export function getAssetUrl(path) {
-    if (!isTauriEnv || !convertFileSrc || !path) {
-        return path;
-    }
-
-    try {
-        return convertFileSrc(path, 'asset');
-    } catch {
-        return path;
-    }
+    const host = getHostApi();
+    if (host?.openExternalUrl) return host.openExternalUrl(href);
+    return invoke('plugin:opener|open_url', { url: href, with: openWith });
 }

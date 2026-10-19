@@ -1,4 +1,5 @@
 // @ts-check
+import { FILE_READ_COUNT_BYTES } from '../../kernel/byte-protocol.js';
 
 import { isWebHost } from '../../../../tauri-bridge.js';
 
@@ -106,8 +107,8 @@ export function createReadableFileStreamService({ invoke }) {
                     len,
                 });
                 const bytes = normalizeReadResponse(data);
-                const bytesRead = Number(new DataView(bytes.buffer, bytes.byteOffset + bytes.byteLength - 8, 8).getBigUint64(0));
-                if (bytesRead > len || bytesRead > bytes.byteLength - 8) {
+                const bytesRead = Number(new DataView(bytes.buffer, bytes.byteOffset + bytes.byteLength - FILE_READ_COUNT_BYTES, FILE_READ_COUNT_BYTES).getBigUint64(0));
+                if (bytesRead > len || bytesRead > bytes.byteLength - FILE_READ_COUNT_BYTES) {
                     throw new Error(`Invalid fs read length for ${filePath}: ${bytesRead}`);
                 }
                 if (bytesRead === 0) {
