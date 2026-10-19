@@ -5,6 +5,12 @@ import { readFileSync } from 'node:fs';
 import { HOSTS } from '../helpers/host-identity.mjs';
 import { createBrowserRuntime } from './runtime.mjs';
 
+// The HTTP fixture returns the canonical Rust settings DTO, not a partial preview.
+const HOST_SETTINGS = {
+    ...JSON.parse(readFileSync(new URL('../../src/tauri/web-host/default-state.json', import.meta.url), 'utf8')).settings,
+    embedded_runtime_profile: 'off',
+};
+
 const FIRST = 'Recovered first half; ';
 const LAST = 'the complete tail survives reopening. 完整末尾。';
 const TEXT = FIRST + LAST;
@@ -74,10 +80,7 @@ test('browser generation recovery uses the normal decoder, message finalization 
             case 'wait_for_backend_ready':
             case 'devlog_append_frontend_logs': return null;
             case 'backend_error_bridge_ready': return [];
-            case 'get_tauritavern_settings': return {
-                panel_runtime_profile: 'off', embedded_runtime_profile: 'off',
-                dynamic_theme: { enabled: false, wallpaper_enabled: false },
-            };
+            case 'get_tauritavern_settings': return HOST_SETTINGS;
             case 'read_frontend_template': return readFileSync(new URL(`../../src/scripts/templates/${args.name}`, import.meta.url), 'utf8');
             case 'chat_history_generation_started':
             case 'chat_history_generation_finished':
