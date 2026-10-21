@@ -1,3 +1,4 @@
+import { mustGetSillyTavernContext } from '../adapters/st/active-chat-ref.js';
 import { estimateTokenCount } from '../brokers/token-count-broker.js';
 import { createAndroidGenerationBridge } from '../adapters/android/android-generation-bridge.js';
 import { confirmAiNotificationPermissionRationale } from '../adapters/st/ai-notification-permission-rationale-popup.js';
@@ -228,7 +229,9 @@ async function attachOpenCodeStableChatId(payload) {
         return;
     }
 
-    payload[OPENCODE_STABLE_CHAT_ID_FIELD] = await globalThis.__TAURITAVERN__.api.chat.current.handle().stableId();
+    payload[OPENCODE_STABLE_CHAT_ID_FIELD] = mustGetSillyTavernContext().getCurrentChatId()
+        ? await globalThis.__TAURITAVERN__.api.chat.current.handle().stableId()
+        : createRandomId();
 }
 
 function buildErrorAssistantText(error) {
@@ -345,7 +348,7 @@ function createImmediateErrorStreamResponse(error, payload) {
     });
 }
 
-function createStreamId() {
+function createRandomId() {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
         return crypto.randomUUID();
     }
@@ -361,7 +364,7 @@ async function invokeChatCompletionWithAbort(context, payload, signal) {
     }
     await attachOpenCodeStableChatId(payload);
 
-    const requestId = createStreamId();
+    const requestId = createRandomId();
     let abortRequested = false;
     let abortHandler = null;
     if (signal) {
@@ -396,7 +399,7 @@ async function invokeChatCompletionWithAbort(context, payload, signal) {
 
 async function createChatCompletionStreamResponse(context, payload, signal, lifecycle, presentation = null, attached = false) {
     if (!attached) await attachOpenCodeStableChatId(payload);
-    const streamId = presentation?.jobId ?? createStreamId();
+    const streamId = presentation?.jobId ?? createRandomId();
     const stopped = new AbortController();
     const encoder = new TextEncoder();
 

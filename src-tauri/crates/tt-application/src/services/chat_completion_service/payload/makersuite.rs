@@ -136,11 +136,7 @@ fn build_google_payload(
         && gemini_model
             .as_ref()
             .is_some_and(GeminiModel::has_fixed_sampling);
-    let no_prefill = has_fixed_sampling_parameters
-        && payload
-            .get("chat_completion_source")
-            .and_then(Value::as_str)
-            != Some("opencode");
+    let no_prefill = has_fixed_sampling_parameters;
     let (contents, system_prompt) = convert_messages(
         payload.get("messages"),
         use_system_prompt,
@@ -414,7 +410,7 @@ fn convert_messages(
             .to_lowercase();
         let mut merge_with_previous = matches!(role.as_str(), "tool" | "function");
 
-        let native_gemini_parts = if role == "assistant" {
+        let native_gemini_parts = if !matches!(role.as_str(), "tool" | "function") {
             message_native_gemini_parts(message)
         } else {
             None
