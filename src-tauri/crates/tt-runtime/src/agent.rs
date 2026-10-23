@@ -76,7 +76,9 @@ pub(crate) fn build(repositories: &Repositories, dependencies: AgentDependencies
         repositories.chat_repository.clone(),
         repositories.group_chat_repository.clone(),
         skill_service,
-        Arc::new(ChatCompletionAgentModelGateway::new(chat_completion_service)),
+        Arc::new(ChatCompletionAgentModelGateway::new(
+            chat_completion_service,
+        )),
         agent_profile_service.clone(),
         llm_connection_service,
         prompt_assembly_service.clone(),

@@ -53,9 +53,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Check Rust formatting without modifying the checkout
+        id: rustfmt
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
+      # Collect other failures even when formatting needs work; the failed step
+      # still fails this job, so the release gate below remains closed.
       - name: Run checks and tests
+        if: ${{ !cancelled() && (success() || steps.rustfmt.outcome == 'failure') }}
         run: pnpm run check
 
   build:

@@ -14,10 +14,15 @@ pub async fn materialize_builtin_skills(
     let cache_root = data_root.join("_cache/builtin-skills");
     tokio::task::spawn_blocking(move || materialize(resources.as_ref(), &cache_root))
         .await
-        .map_err(|error| DomainError::InternalError(format!("Builtin Skills task failed: {error}")))?
+        .map_err(|error| {
+            DomainError::InternalError(format!("Builtin Skills task failed: {error}"))
+        })?
 }
 
-fn materialize(resources: &dyn BundledResources, cache_root: &Path) -> Result<PathBuf, DomainError> {
+fn materialize(
+    resources: &dyn BundledResources,
+    cache_root: &Path,
+) -> Result<PathBuf, DomainError> {
     let files = resources.list_default_files_under("skills", "")?;
     if files.is_empty() {
         return Err(DomainError::NotFound(
@@ -62,7 +67,11 @@ fn materialize(resources: &dyn BundledResources, cache_root: &Path) -> Result<Pa
     }
     // Publish only a complete package, never a partially copied workspace view.
     std::fs::rename(&staging, &target).map_err(|error| {
-        DomainError::file_io("publish builtin Skills", target.display().to_string(), error)
+        DomainError::file_io(
+            "publish builtin Skills",
+            target.display().to_string(),
+            error,
+        )
     })?;
     if let Err(error) = remove_other_entries(cache_root, &target) {
         tracing::warn!(

@@ -23,7 +23,11 @@ impl BundledResources for BundledResourceStore {
         read_resource_bytes(&self.app_handle, relative_path)
     }
 
-    fn list_default_files_under(&self, root: &str, prefix: &str) -> Result<Vec<String>, DomainError> {
+    fn list_default_files_under(
+        &self,
+        root: &str,
+        prefix: &str,
+    ) -> Result<Vec<String>, DomainError> {
         list_default_files_under(root, prefix)
     }
 }

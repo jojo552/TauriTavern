@@ -15,5 +15,9 @@ pub trait BundledResources: Send + Sync {
     /// the prefix itself (for example `sprites/Alice/happy.png` under `content`).
     /// An empty prefix lists all files in the root. A prefix with no files returns
     /// an empty list; manifest or IO failures must be propagated.
-    fn list_default_files_under(&self, root: &str, prefix: &str) -> Result<Vec<String>, DomainError>;
+    fn list_default_files_under(
+        &self,
+        root: &str,
+        prefix: &str,
+    ) -> Result<Vec<String>, DomainError>;
 }

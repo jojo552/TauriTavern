@@ -33,7 +33,11 @@ impl BundledResources for DirectoryBundledResources {
         })
     }
 
-    fn list_default_files_under(&self, root: &str, prefix: &str) -> Result<Vec<String>, DomainError> {
+    fn list_default_files_under(
+        &self,
+        root: &str,
+        prefix: &str,
+    ) -> Result<Vec<String>, DomainError> {
         if !matches!(root, "content" | "skills") {
             return Err(DomainError::InvalidData(format!(
                 "Unknown default resource root: {root}"
