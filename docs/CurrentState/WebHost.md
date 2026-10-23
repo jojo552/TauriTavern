@@ -64,6 +64,7 @@ const host = installWebHost({
 | `get_bootstrap_metadata` | `/api/characters/all`、`/api/groups/all`、`/api/avatars/get`、`/api/secrets/read` |
 | `get_character_chats_by_id` | `/api/characters/chats`，结果须为数组，没有聊天时为 `[]`；ST 这时返回的 `{ error: true }` 会被拒绝 |
 | `get_chat_payload_path`；`plugin:fs\|open`、`plugin:fs\|fstat`、`plugin:fs\|read`；`plugin:resources\|close` | `/api/chats/get`，见"聊天读取" |
+| `list_active_agent_runs` | 返回空集合，浏览器宿主不拥有原生 Agent Run |
 | `get_all_backgrounds`、`get_background_folders`、`get_all_background_metadata` | `/api/backgrounds/all`、`/api/backgrounds/folders`、`/api/image-metadata/all` |
 | `get_extensions` | `GET /api/extensions/discover`，把 ST 的 `type` 转回原生 `extension_type` |
 | `read_frontend_template`、`read_frontend_extension_template` | 读取页面的模板与系统扩展模板 |
@@ -91,7 +92,7 @@ const host = installWebHost({
 | `devlog_append_frontend_logs` | 确认接收；日志留在前端采集器里，浏览器里没有原生日志文件 |
 
 其余命令和 `core.convertFileSrc` 一律以 `{ Unsupported: message }` 拒绝：
-- 不在范围内的：Agent 运行、MCP 操作、同步、扫码、原生分享与导出、剪贴板、外部打开、更新安装、extension store 写入、群聊与 cold swipe 资源。
+- 不在范围内的：Agent 运行、MCP 操作、同步、扫码、原生分享与导出、剪贴板、外部打开、更新安装、extension store 写入、群聊与 cold swipe 资源、原生截图 `capture_content_viewport`。
 - 调用方自己能处理失败的命令不实现，例如 token 计数（ST 改用估算）和启动时的更新检查（跳过）。
 - 桌面窗口的 `isFullscreen()` 返回 `false`，`setFullscreen()` 不支持。
 

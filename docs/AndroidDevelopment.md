@@ -38,7 +38,7 @@ https://v2.tauri.app/develop/resources/#android
 
 `src-tauri/crates/tauritavern/build.rs` 现在会：
 
-- 扫描 `../default/content`，生成 `default_content_manifest.json`（默认内容清单）；
+- 扫描仓库 `default/content` 与 `default/skills`，生成按资源根分组的 `default_files_manifest.json`（默认内容和内置只读技能清单）；
 - 需要内嵌资源时，把前端模板与内置扩展的 HTML 模板写入 `embedded_resources.rs`（虚拟路径 -> `include_bytes!` 映射）。
 
 #### B. 运行时统一资源访问入口
@@ -47,9 +47,9 @@ https://v2.tauri.app/develop/resources/#android
 
 - `read_resource_bytes`
 - `read_resource_text`
-- `read_resource_json`
-- `copy_resource_to_file`
-- `list_default_content_files_under`
+- `list_default_files_under(root, prefix)`（`content` 或 `skills` 根）
+
+JSON 解码、异步资源复制和内置技能物化位于 `tt-adapter-storage-core`，通过同一 `BundledResources` port 读取；原生 assets 只拥有平台资源 IO 与生成 manifest，不再维护独立的技能复制路径。
 
 平台策略：
 

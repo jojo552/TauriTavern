@@ -1,7 +1,7 @@
 {
   "name": "tauritavern",
   "private": true,
-  "version": "2.3.0",
+  "version": "2.4.0",
   "type": "module",
   "packageManager": "pnpm@11.22.0",
   "scripts": {
@@ -26,6 +26,7 @@
     "test:contracts": "node --test --test-timeout=60000 --test-force-exit \"tests/*.test.mjs\"",
     "test:ui": "rstest --config rstest.config.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --workspace --no-default-features --tests",
+    "skills:tt-docs": "node scripts/builtin-skills/build-tt-docs.mjs",
     "web:build": "rspack build --config rspack.config.js --mode production",
     "web:dev": "rspack build --config rspack.config.js --mode development --watch",
     "tauri:dev": "node scripts/tauri-app.mjs --prepare-frontend dev",

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AssistantSnapshot } from './controller';
 import type { AssistantActions, AssistantController } from './host';
 import { CopyButton, Disclosure, ErrorNotice, Icon, Markdown, formatDuration, formatTick, useNow } from './components';
@@ -12,6 +12,7 @@ const toolLabels: Record<string, [MessageKey, MessageKey]> = {
     'extension/in-app-agent:app.read_logs': ['logs', 'logsHelp'],
     'extension/in-app-agent:app.snapshot': ['snapshot', 'snapshotHelp'],
     'extension/in-app-agent:app.interact': ['interact', 'interactHelp'],
+    'extension/in-app-agent:app.capture': ['capture', 'captureHelp'],
     'builtin:workspace.read_file': ['readFile', 'readFileHelp'],
     'builtin:workspace.write_file': ['writeFile', 'writeFileHelp'],
     'builtin:workspace.list_files': ['listFiles', 'listFilesHelp'],
@@ -80,6 +81,7 @@ function buildRunBlocks(snapshot: AssistantSnapshot, lastMessageByRun: Map<strin
             block.endedAt = at;
         }
         const { message } = entry;
+        if (entry.compaction) { block.workEntries.push(entry); continue; }
         if (message.role === 'user') { block.userEntries.push(entry); continue; }
         block.toolCalls += message.parts.filter(part => part.type === 'toolCall').length;
         if (message.role === 'assistant' && lastMessageByRun.get(entry.runId) === entry && !message.parts.some(part => part.type === 'toolCall')) {
@@ -117,7 +119,23 @@ function RunBar({ block, expanded, onToggle }: { block: RunBlock; expanded: bool
     </button>;
 }
 
-function ToolResult({ result, runId, actions }: { result: Result; runId: string; actions: AssistantActions }) {
+function ToolImage({ path, mimeType, runId, actions }: { path: string; mimeType: string; runId: string; actions: AssistantActions }) {
+    const [url, setUrl] = useState<string | null>(null);
+    const [error, setError] = useState<unknown>(null);
+    useEffect(() => {
+        let active = true;
+        let objectUrl: string | null = null;
+        void actions.readImage(runId, { path, mimeType }).then(blob => {
+            if (!active) return;
+            objectUrl = URL.createObjectURL(blob);
+            setUrl(objectUrl);
+        }).catch(error => { if (active) setError(error); });
+        return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+    }, [runId, path, mimeType, actions]);
+    return error != null ? <ErrorNotice error={error} /> : url ? <img className="ttia-tool-image" src={url} alt={path} /> : null;
+}
+
+function ToolResult({ result, runId, actions, expanded }: { result: Result; runId: string; actions: AssistantActions; expanded: boolean }) {
     const [full, setFull] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<unknown>(null);
@@ -131,6 +149,7 @@ function ToolResult({ result, runId, actions }: { result: Result; runId: string;
             setLoading(true); setError(null);
             void actions.readResult(runId, path).then(file => setFull(file.text)).catch(setError).finally(() => setLoading(false));
         }}>{loading ? tr('loading') : tr('fullResult')}</button>}
+        {expanded && result.images?.map(image => <ToolImage key={`${runId}:${image.path}`} path={image.path} mimeType={image.mimeType} runId={runId} actions={actions} />)}
         {result.resourceRefs.length > 0 && <div className="ttia-refs">{result.resourceRefs.join('\n')}</div>}
         {error != null && <ErrorNotice error={error} />}
     </div>;
@@ -162,12 +181,12 @@ function ToolCall({ call, result, runId, origin, events, active, actions }: {
         {detail && <span className="ttia-detail-pill" title={detail}>{detail}</span>}
         <span className="ttia-tool-state">{stateText}</span>
     </>}>
-        <div className="ttia-tool-detail">
+        {open => <div className="ttia-tool-detail">
             <div className="ttia-detail-label">{tr(typeof code === 'string' ? 'code' : 'arguments')}
                 <CopyButton text={typeof code === 'string' ? code : args} copy={actions.copy} /></div>
             <pre>{typeof code === 'string' ? code : args}</pre>
-            {result && <ToolResult result={result} runId={runId} actions={actions} />}
-        </div>
+            {result && <ToolResult result={result} runId={runId} actions={actions} expanded={open} />}
+        </div>}
     </Disclosure>;
 }
 function AssistantMessage({ parts, results, runId, origin, scope, events, active, finalReply, streaming = false, actions }: {
@@ -248,7 +267,7 @@ export function Transcript({ snapshot, controller, actions, visible }: {
     useLayoutEffect(() => {
         const root = scroller.current;
         if (!root || !visible) return;
-        const userSeq = snapshot.messages.filter(entry => entry.message.role === 'user').at(-1)?.seq;
+        const userSeq = snapshot.messages.filter(entry => !entry.compaction && entry.message.role === 'user').at(-1)?.seq;
         if (userSeq !== undefined && userSeq > lastMessageSeq.current) following.current = true;
         lastMessageSeq.current = snapshot.messages.at(-1)?.seq ?? 0;
         if (anchor.current && (snapshot.messages[0]?.seq ?? Infinity) < anchor.current.firstSeq) {
@@ -288,12 +307,23 @@ export function Transcript({ snapshot, controller, actions, visible }: {
                 {buildRunBlocks(snapshot, lastMessageByRun).map((block, blockIndex, blocks) => {
                     const renderEntry = (entry: TauriTavernAgentSessionMessage, collapseContent = false) => {
                         const { message } = entry;
+                        if (entry.compaction) {
+                            const summary = message.parts[1] as Extract<Part, { type: 'text' }>;
+                            const locale = document.documentElement.lang || undefined;
+                            return <div key={entry.seq} data-message-seq={entry.seq} data-new={entry.seq > initialSeq}>
+                                <Disclosure label={<>{tr('contextCompacted')} <span className="ttia-muted">{tr('compactionTokens', {
+                                    before: entry.compaction.tokensBefore.toLocaleString(locale), after: entry.compaction.tokensAfter.toLocaleString(locale),
+                                })}</span></>}>
+                                    <Markdown text={summary.text} actions={actions} />
+                                </Disclosure>
+                            </div>;
+                        }
                         if (message.role === 'user') return <div className="ttia-user" key={entry.seq} data-message-seq={entry.seq} data-new={entry.seq > initialSeq}>
                             {message.parts.filter(part => part.type === 'text').map(part => part.text).join('\n')}</div>;
                         if (message.role === 'tool') {
                             const orphaned = message.parts.filter(part => part.type === 'toolResult' && !paired.has(part.result));
                             return orphaned.length ? <div key={entry.seq} data-message-seq={entry.seq}>{orphaned.map((part, index) => part.type === 'toolResult'
-                                ? <Disclosure key={index} label={tr('missingCall')}><ToolResult result={part.result} runId={entry.runId} actions={actions} /></Disclosure> : null)}</div> : null;
+                                ? <Disclosure key={index} label={tr('missingCall')}>{open => <ToolResult result={part.result} runId={entry.runId} actions={actions} expanded={open} />}</Disclosure> : null)}</div> : null;
                         }
                         const key = messageKey(entry);
                         const parts = collapseContent ? message.parts.filter(part => part.type !== 'reasoning') : message.parts;

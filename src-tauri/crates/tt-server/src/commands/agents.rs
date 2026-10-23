@@ -51,6 +51,7 @@ const COMMANDS: &[&str] = &[
     "resolve_agent_persistent_state_metadata_update",
     // Run inspection and history.
     "list_agent_runs",
+    "list_active_agent_runs",
     "read_agent_run_events",
     "read_agent_task_detail",
     "read_agent_model_turn",
@@ -217,6 +218,7 @@ pub(super) async fn dispatch(
         ),
 
         "list_agent_runs" => json(history.list_runs(a.required("dto")?).await?),
+        "list_active_agent_runs" => json(runtime.list_active_runs().await),
         "read_agent_run_events" => json(runtime.read_events(a.required("dto")?).await?),
         "read_agent_task_detail" => json(runtime.read_task_detail(a.required("dto")?).await?),
         "read_agent_model_turn" => json(runtime.read_model_turn(a.required("dto")?).await?),

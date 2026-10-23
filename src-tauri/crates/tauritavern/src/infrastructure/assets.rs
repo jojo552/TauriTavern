@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use tauri::AppHandle;
 #[cfg(not(embedded_resources))]
@@ -12,7 +13,8 @@ use tt_adapter_storage_core::bundled_resources::{
 use tt_domain::errors::DomainError;
 
 // The generated manifest is immutable; keep a parse failure as text so every caller sees it.
-static DEFAULT_CONTENT_MANIFEST: OnceLock<Result<Vec<String>, String>> = OnceLock::new();
+static DEFAULT_FILES_MANIFEST: OnceLock<Result<BTreeMap<String, Vec<String>>, String>> =
+    OnceLock::new();
 
 #[cfg(any(embedded_resources, feature = "portable"))]
 mod embedded_resources {
@@ -79,7 +81,7 @@ pub fn read_resource_bytes(
     }
 }
 
-pub fn list_default_content_files_under(prefix: &str) -> Result<Vec<String>, DomainError> {
+pub fn list_default_files_under(root: &str, prefix: &str) -> Result<Vec<String>, DomainError> {
     let normalized_prefix = prefix.trim_matches('/').replace('\\', "/");
     let query = if normalized_prefix.is_empty() {
         String::new()
@@ -87,10 +89,13 @@ pub fn list_default_content_files_under(prefix: &str) -> Result<Vec<String>, Dom
         format!("{}/", normalized_prefix)
     };
 
-    let files = DEFAULT_CONTENT_MANIFEST
-        .get_or_init(load_default_content_manifest)
+    let manifest = DEFAULT_FILES_MANIFEST
+        .get_or_init(load_default_files_manifest)
         .as_ref()
         .map_err(|message| DomainError::InvalidData(message.clone()))?;
+    let files = manifest.get(root).ok_or_else(|| {
+        DomainError::InvalidData(format!("Unknown default resource root: {root}"))
+    })?;
     if query.is_empty() {
         return Ok(files.to_vec());
     }
@@ -102,21 +107,23 @@ pub fn list_default_content_files_under(prefix: &str) -> Result<Vec<String>, Dom
         .collect())
 }
 
-fn load_default_content_manifest() -> Result<Vec<String>, String> {
-    let raw = include_str!(concat!(env!("OUT_DIR"), "/default_content_manifest.json"));
-    match serde_json::from_str::<Vec<String>>(raw) {
-        Ok(mut entries) => {
-            entries.sort();
-            Ok(entries)
+fn load_default_files_manifest() -> Result<BTreeMap<String, Vec<String>>, String> {
+    let raw = include_str!(concat!(env!("OUT_DIR"), "/default_files_manifest.json"));
+    match serde_json::from_str::<BTreeMap<String, Vec<String>>>(raw) {
+        Ok(mut roots) => {
+            for entries in roots.values_mut() {
+                entries.sort();
+            }
+            Ok(roots)
         }
         Err(error) => {
             tracing::error!(
                 target: crate::observability_targets::USER_VISIBLE_ERROR,
-                "Failed to load generated default content manifest: {}",
+                "Failed to load generated default resource manifest: {}",
                 error
             );
             Err(format!(
-                "Invalid generated default content manifest: {}",
+                "Invalid generated default resource manifest: {}",
                 error
             ))
         }

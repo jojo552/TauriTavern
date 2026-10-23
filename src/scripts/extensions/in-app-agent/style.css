@@ -202,6 +202,7 @@
 .ttia-tool.is-running .ttia-tool-state { color: var(--ttia-live); }
 .ttia-detail-label { display: flex; align-items: center; justify-content: space-between; font-size: .83em; color: var(--ttia-muted); }
 .ttia-tool-detail { margin: 4px 0 12px 10px; padding-left: 15px; border-left: 1px solid var(--ttia-line); }
+.ttia-tool-image { display: block; max-width: 100%; max-height: 22rem; margin: 8px 0; border: 1px solid var(--ttia-line); border-radius: 9px; }
 .ttia-refs { font: .73em/1.6 var(--monoFontFamily); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ttia-muted); }
 .ttia-root .ttia-latest { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); border: 1px solid var(--ttia-line); border-radius: 99px; background: var(--ttia-surface); box-shadow: var(--ttia-shadow-lift); font-size: .8em; padding: 7px 12px; white-space: nowrap; animation: ttia-latest-in 260ms var(--ttia-spring) both; }
 .ttia-root .ttia-latest:active { transform: translateX(-50%) scale(.97); }
@@ -249,6 +250,12 @@
 .ttia-model[data-state="missing"] .ttia-chip-icon::after { background: var(--warning); }
 .ttia-effort { flex-shrink: 0; }
 .ttia-root .ttia-effort .ttia-chip { gap: 6px; }
+.ttia-context { flex-shrink: 0; }
+.ttia-root .ttia-context .ttia-chip { gap: 5px; font-variant-numeric: tabular-nums; }
+.ttia-context-ring { flex-shrink: 0; width: 14px; height: 14px; transform: rotate(-90deg); }
+.ttia-context-ring circle { fill: none; stroke-width: 2; }
+.ttia-context-ring circle:first-child { stroke: var(--ttia-line); }
+.ttia-context-ring circle:last-child { stroke: currentColor; transition: stroke-dasharray var(--ttia-d-med) var(--ttia-ease); }
 .ttia-menu-pop {
     position: absolute; z-index: 2; left: var(--ttia-pop-x, 0); bottom: calc(100% + 6px);
     width: max-content; min-width: 10rem; max-width: min(17rem, calc(100vw - 32px));
@@ -282,7 +289,7 @@
 .ttia-menu-item > i { flex-shrink: 0; width: 1em; margin-left: auto; font-size: .78em; }
 .ttia-menu-item[aria-checked="false"] > i { visibility: hidden; }
 .ttia-menu-detail { flex-shrink: 0; color: var(--ttia-muted); font-size: .88em; }
-.ttia-menu-item.is-missing { color: var(--ttia-muted); cursor: default; }
+.ttia-menu-item[aria-disabled="true"] { color: var(--ttia-muted); cursor: default; }
 .ttia-menu-item.is-missing .ttia-menu-detail { color: var(--warning); }
 .ttia-menu-rule { height: 1px; margin: 4px 8px; background: var(--ttia-line); }
 .ttia-root .ttia-model-manage { color: var(--ttia-muted); transition: color var(--ttia-d-fast); }

@@ -1,23 +1,10 @@
 // @ts-check
-import { FILE_READ_COUNT_BYTES } from '../../kernel/byte-protocol.js';
+import { FILE_READ_COUNT_BYTES, readByteResponse } from '../../kernel/byte-protocol.js';
 
 import { isWebHost } from '../../../../tauri-bridge.js';
 
 // Amortize IPC roundtrips while bounding each response and decode burst.
 const FS_READ_MAX_CHUNK_BYTES = 4 * 1024 * 1024;
-
-/** @param {any} data */
-function normalizeReadResponse(data) {
-    if (data instanceof Uint8Array) {
-        return data;
-    }
-
-    if (data instanceof ArrayBuffer) {
-        return new Uint8Array(data);
-    }
-
-    throw new Error('Unexpected resource read response');
-}
 
 /**
  * @param {{ invoke: Function }} deps
@@ -106,7 +93,7 @@ export function createReadableFileStreamService({ invoke }) {
                     rid,
                     len,
                 });
-                const bytes = normalizeReadResponse(data);
+                const bytes = readByteResponse(data);
                 const bytesRead = Number(new DataView(bytes.buffer, bytes.byteOffset + bytes.byteLength - FILE_READ_COUNT_BYTES, FILE_READ_COUNT_BYTES).getBigUint64(0));
                 if (bytesRead > len || bytesRead > bytes.byteLength - FILE_READ_COUNT_BYTES) {
                     throw new Error(`Invalid fs read length for ${filePath}: ${bytesRead}`);
@@ -130,7 +117,7 @@ export function createReadableFileStreamService({ invoke }) {
     function createByteStream(rid) {
         return createReadableResourceStream(
             Promise.resolve(rid),
-            async (rid) => normalizeReadResponse(
+            async (rid) => readByteResponse(
                 await invoke('read_bytes', { rid }),
             ),
         );

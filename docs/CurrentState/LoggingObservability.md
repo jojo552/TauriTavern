@@ -46,7 +46,7 @@ backend error toast 不是普通 error 日志的副作用，而是显式产品�
 - 原生：`app/dev_observability.rs::DevObservabilityHub` 暴露给 presentation commands，前端启用流时订阅广播并以 Tauri 事件 `tauritavern-backend-log` / `tauritavern-llm-api-log` 推送，落后于广播容量时记录 warn（面板仍可用 tail/index 补看）；`dev_logging_commands.rs` 和 `settings_commands.rs` 不直接接触 store。
 - 浏览器：`tt-server` 在页面声明启用时为该页订阅广播，经页面 SSE 推送同名事件；页面关闭或停用即取消。见 [BrowserHost](BrowserHost.md)。
 
-LLM API logs 由 `LoggingChatCompletionRepository` 记录 raw/readable 请求响应。JSON 请求及非流式 JSON 响应写入前会移除内部 provider state，并把 data URL、Claude base64 source、Gemini inline data 中的媒体内容替换为只含 MIME 与编码长度的占位符；脱敏只作用于日志副本，不修改出站 payload。持久化失败是诊断日志，不触发 backend error toast。
+LLM API logs 由共享 `LoggingChatCompletionRepository` 记录 raw/readable 请求响应。JSON 请求及非流式 JSON 响应写入前会移除内部 provider state，并把 base64 data URL，以及同一对象内同时带非空字符串 `data` 和媒体类型（`media_type`、`mime_type` 或 `mimeType`）的内联媒体，替换为只含 MIME 与编码长度的占位符；脱敏只作用于日志副本，不修改出站 payload。持久化失败是诊断日志，不触发 backend error toast。
 
 ## 5. 持续开发守卫
 

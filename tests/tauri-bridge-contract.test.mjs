@@ -92,7 +92,7 @@ test(`browser recovery stays silent; ${authenticationLost ? 'expired login offer
     const keys = ['window', 'document', 'fetch', 'EventSource', 'toastr', 'reportError', 'setTimeout', 'clearTimeout'];
     const previous = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
     const restoreHost = installHostIdentity({ platform: 'browser', kind: 'web' });
-    const warnings = [], errors = [], timers = new Map(), opened = [], navigated = [];
+    const warnings = [], errors = [], timers = new Map(), opened = [], navigated = [], commands = [];
     let denyAuth = false;
     let nextTimer = 0, sessions = 0, nextSource = Promise.withResolvers();
     class Events {
@@ -120,7 +120,16 @@ test(`browser recovery stays silent; ${authenticationLost ? 'expired login offer
             }
             assert.equal(url, '/__tt/invoke');
             if (denyAuth) return Response.json({ error: 'Login required' }, { status: 401, headers: { 'x-tt-login-required': '1' } });
-            assert.equal(JSON.parse(init.body).command, 'wait_for_backend_ready');
+            const { command, args } = JSON.parse(init.body);
+            commands.push(command);
+            if (command === 'read_agent_workspace_bytes') {
+                assert.deepEqual(args.dto, { runId: 'run-images', path: 'tool-results/screenshot.png' });
+                return new Response(Uint8Array.of(137, 80, 78, 71), { headers: { 'content-type': 'application/octet-stream' } });
+            }
+            if (command === 'capture_content_viewport') {
+                return Response.json({ Unsupported: 'Native viewport capture is unavailable in an HTTP host' }, { status: 400 });
+            }
+            assert.equal(command, 'wait_for_backend_ready');
             return Response.json(null);
         };
         const initial = invoke('wait_for_backend_ready');
@@ -130,6 +139,16 @@ test(`browser recovery stays silent; ${authenticationLost ? 'expired login offer
         assert.equal(await getCsrfToken(), 'csrf-1');
         assert.equal(globalThis.window.__TAURI__, undefined, 'HTTP uses no Tauri global');
         assert.equal(globalThis.window.__TAURI_RUNNING__, undefined);
+
+        const { createAgentRunRuntimeApi } = await import('../src/tauri/main/api/agent-run-runtime.js');
+        const agent = createAgentRunRuntimeApi({ safeInvoke: invoke });
+        assert.deepEqual(await agent.readWorkspaceBytes({ runId: 'run-images', path: 'tool-results/screenshot.png' }), Uint8Array.of(137, 80, 78, 71));
+        const { installLayoutApi } = await import('../src/tauri/main/api/layout.js');
+        globalThis.window.__TAURITAVERN__ = { invoke: { safeInvoke: invoke } };
+        installLayoutApi();
+        await assert.rejects(globalThis.window.__TAURITAVERN__.api.layout.capture(), error =>
+            error.Unsupported === 'Native viewport capture is unavailable in an HTTP host');
+        assert.equal(commands.filter(command => command === 'capture_content_viewport').length, 1, 'unsupported capture is not retried or replaced with fake pixels');
 
         nextSource = Promise.withResolvers();
         first.onerror(); // A background connection loss is recovered, not a user action request.

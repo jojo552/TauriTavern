@@ -140,15 +140,21 @@ export async function createAssistantActions(api: TauriTavernHostApi, context: A
         async loadOptions(profileId: string): Promise<SettingsOptions> {
             const manager = context.getPresetManager('openai');
             if (!manager) throw new Error('in-app-agent: preset manager is unavailable');
-            const [catalog, skills] = await Promise.all([
-                agent.tools.list({ context: 'session' }), skill.list({ scope: { kind: 'profile', profileId } }),
+            const [catalog, builtinSkills, profileSkills] = await Promise.all([
+                agent.tools.list({ context: 'session' }),
+                skill.list({ scope: { kind: 'builtin' } }), skill.list({ scope: { kind: 'profile', profileId } }),
             ]);
             return {
                 presets: manager.getAllPresets().filter(name => name && manager.findPreset(name) !== 'gui').sort((a, b) => a.localeCompare(b)),
-                tools: catalog.tools, diagnostics: catalog.diagnostics, skills,
+                tools: catalog.tools, diagnostics: catalog.diagnostics,
+                skills: [...new Map([...builtinSkills, ...profileSkills].map(item => [item.name, item])).values()],
             };
         },
         readResult: (runId: string, path: string) => agent.readWorkspaceFile({ runId, path }),
+        async readImage(runId: string, image: { path: string; mimeType: string }) {
+            const bytes = await agent.readWorkspaceBytes({ runId, path: image.path });
+            return new Blob([bytes], { type: image.mimeType });
+        },
         openConnections() {
             const toggle = document.querySelector<HTMLElement>('#sys-settings-button .drawer-toggle');
             if (!toggle) throw new Error('in-app-agent: connection settings entry is unavailable');

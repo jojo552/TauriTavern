@@ -6,7 +6,7 @@ use tt_domain::errors::DomainError;
 use tt_ports::bundled_resources::BundledResources;
 use tt_ports::bundled_template::BundledTemplateStore;
 
-/// Read-only bundled resources from a directory containing `default/content`.
+/// Read-only bundled resources from a directory containing `default/content` and `default/skills`.
 /// No alternate directory or embedded source is used when a read fails.
 pub struct DirectoryBundledResources {
     resource_root: PathBuf,
@@ -33,16 +33,21 @@ impl BundledResources for DirectoryBundledResources {
         })
     }
 
-    fn list_default_content_files_under(&self, prefix: &str) -> Result<Vec<String>, DomainError> {
+    fn list_default_files_under(&self, root: &str, prefix: &str) -> Result<Vec<String>, DomainError> {
+        if !matches!(root, "content" | "skills") {
+            return Err(DomainError::InvalidData(format!(
+                "Unknown default resource root: {root}"
+            )));
+        }
         let prefix = prefix.trim_matches('/').replace('\\', "/");
         let query = if prefix.is_empty() {
             String::new()
         } else {
             format!("{}/", normalize_resource_relative_path(&prefix)?)
         };
-        let content_root = self.resource_root.join("default/content");
+        let content_root = self.resource_root.join("default").join(root);
         let mut files = Vec::new();
-        collect_default_content_files(&content_root, &content_root, &mut files)?;
+        collect_default_files(&content_root, &content_root, &mut files)?;
         files.retain(|path| path.starts_with(&query));
         files.sort();
         Ok(files)
@@ -55,7 +60,7 @@ impl BundledTemplateStore for DirectoryBundledResources {
     }
 }
 
-fn collect_default_content_files(
+fn collect_default_files(
     root: &Path,
     current: &Path,
     files: &mut Vec<String>,
@@ -84,7 +89,7 @@ fn collect_default_content_files(
             ))
         })?;
         if file_type.is_dir() {
-            collect_default_content_files(root, &path, files)?;
+            collect_default_files(root, &path, files)?;
         } else if file_type.is_file() {
             let relative = path.strip_prefix(root).map_err(|error| {
                 DomainError::InternalError(format!(

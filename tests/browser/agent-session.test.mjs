@@ -17,16 +17,11 @@ const assistant = {
     providerMetadata: { model: 'original-model' },
 };
 const result = { role: 'tool', parts: [{ type: 'toolResult', result: { callId: call.callId, toolId: call.toolId, content: 'Saved {{user}} content.', structured: {}, isError: false, resourceRefs: [] } }], providerMetadata: {} };
-const history = [message('user', 'Read the file.'), assistant, result, message('assistant', 'I read it.'), message('user', 'Continue.')];
+const history = [[message('user', 'Read the file.')], [assistant, result], [message('assistant', 'I read it.')], [message('user', 'Continue.')]];
 
 try {
     await startHost();
     await load('script.js');
-    // A deterministic tokenizer transport keeps this a real PromptManager test.
-    const ajax = window.jQuery.ajax;
-    window.jQuery.ajax = options => options.url?.startsWith('/api/tokenizers/openai/count-batch')
-        ? Promise.resolve({ token_counts: JSON.parse(options.data).map(item => 4 + Math.ceil(JSON.stringify(item).length / 4)) })
-        : ajax(options);
     const { normalizeChatCompletionSettingsForPromptAssembly } = getModule('scripts/openai.js').namespace;
     const { buildPromptAssemblySnapshot } = getModule('tauri/main/api/agent-prompt-assembly.js').namespace;
     const { createAgentSessionsApi } = getModule('tauri/main/api/agent-sessions.js').namespace;
@@ -49,89 +44,55 @@ try {
         contextKind: 'session',
         worldInfoActivation: {},
         macroContext: {},
-        promptInputs: { messages: [], agentMessages: messages, messageExamples: [], worldInfoExamples: { before: [], after: [] }, extensionPrompts: {} },
+        promptInputs: { messages: [], sessionHistory: messages, messageExamples: [], worldInfoExamples: { before: [], after: [] }, extensionPrompts: {} },
     });
-    const assemble = (messages, contextBudget = 4096, reasoningEffort) => {
-        const context = MacroEnvBuilder.createSessionContext(messages, {
+    const assemble = (messages, reasoningEffort) => {
+        const context = MacroEnvBuilder.createSessionContext(messages.flat(), {
             sessionId: 'session-history', variables: { local: {}, global: {} },
         });
         Object.assign(context.names, { user: 'Session user', char: 'Assistant' });
         return buildPromptAssemblySnapshot({
             modelId: 'test-model',
             reasoningEffort,
-            settings: { ...preset, openai_max_context: contextBudget },
+            settings: preset,
             agentContextPolicy: { initialChatHistoryMessages: -1, includeActivatedWorldInfo: false },
             agentSystemPrompt: 'Inspect the workspace.',
             frozenRunInputSnapshot: updateFrozenMacroContext(sessionInput(messages), context),
         });
     };
 
-    const { promptSnapshot: snapshot } = await assemble(history);
+    const assembled = await assemble(history);
+    const { promptSnapshot: snapshot } = assembled;
     const recordedAssistant = snapshot.messages.find(item => item.parts.some(part => part.type === 'toolCall'));
     assert.deepEqual(JSON.parse(JSON.stringify(recordedAssistant)), assistant);
     assert.deepEqual(JSON.parse(JSON.stringify(snapshot.messages.find(item => item.role === 'tool'))), result);
 
-    // Budget pressure drops a whole call/result group, never one protocol half.
-    const limitedInput = await assemble(history, 200);
-    const limited = limitedInput.promptSnapshot.messages;
-    assert.equal(limited.some(item => item.role === 'tool' || item.parts.some(part => part.type === 'toolCall')), false);
-    assert.equal(limited.some(item => item.parts.some(part => part.text === 'Continue.')), true);
+    const longerInput = await assemble([[message('user', 'Older history.')], ...history]);
+    assert.deepEqual(longerInput.frozenRunInputSnapshot.promptInputs, assembled.frozenRunInputSnapshot.promptInputs);
 
-    // Older history outside the budget must not enlarge the input persisted for each Run.
-    const longerInput = await assemble([message('user', 'Older history. '.repeat(1000)), ...history], 200);
-    assert.deepEqual(longerInput.promptSnapshot, limitedInput.promptSnapshot);
-    assert.deepEqual(longerInput.frozenRunInputSnapshot.promptInputs, limitedInput.frozenRunInputSnapshot.promptInputs);
-    assert.equal(JSON.stringify(longerInput.frozenRunInputSnapshot).includes('Older history.'), false);
-
-    // Same-name calls must retain their own outcomes even when replies arrive out of order.
-    const unansweredCall = { ...call, callId: 'call-2', arguments: { path: 'work/pending.md' } };
-    const failedCall = { ...call, callId: 'call-3', arguments: { path: 'work/missing.md' } };
-    const interruptedAssistant = { ...assistant, parts: [
-        ...assistant.parts,
-        { type: 'toolCall', call: unansweredCall },
-        { type: 'toolCall', call: failedCall },
-    ] };
-    const failedResult = { role: 'tool', parts: [{ type: 'toolResult', result: {
-        ...result.parts[0].result, callId: failedCall.callId, content: 'File does not exist.', isError: true,
-    } }], providerMetadata: {} };
-    const interruptedHistory = [history[0], interruptedAssistant, failedResult, result, history.at(-1)];
-    const originalHistory = JSON.stringify(interruptedHistory);
-    const interrupted = (await assemble(interruptedHistory)).promptSnapshot.messages;
-    assert.equal(interrupted.some(item => item.role === 'tool' || item.parts.some(part => part.type === 'toolCall')), false);
-    const explanation = interrupted.find(item => item.parts.some(part => part.text?.includes(call.providerMetadata.modelAlias)))
-        .parts.map(part => part.text).join('\n');
-    assert.ok(explanation.includes(assistant.parts[0].text));
-    const calls = [call, unansweredCall, failedCall];
-    const positions = calls.map(item => explanation.indexOf(item.arguments.path));
-    assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
-    const outcomes = positions.map((position, index) => explanation.slice(position, positions[index + 1]));
-    assert.ok(explanation.includes(call.providerMetadata.modelAlias));
-    for (const item of calls) {
-        assert.equal(explanation.includes(item.callId), false);
-    }
-    assert.equal(explanation.includes(call.toolId), false);
-    assert.ok(outcomes[0].includes(result.parts[0].result.content));
-    assert.equal(outcomes[0].includes(failedResult.parts[0].result.content), false);
-    assert.match(outcomes[1], /unknown/i);
-    assert.equal(outcomes[1].includes(result.parts[0].result.content), false);
-    assert.ok(outcomes[2].includes(failedResult.parts[0].result.content));
-    assert.match(outcomes[2], /error/i);
-    assert.equal(JSON.stringify(interruptedHistory), originalHistory);
+    const depthPrompt = { identifier: 'session-depth', name: 'Session depth', role: 'system', content: 'Depth instruction.', injection_position: 1, injection_depth: 1 };
+    preset.prompts.push(depthPrompt);
+    preset.prompt_order[0].order.push({ identifier: depthPrompt.identifier, enabled: true });
+    const injected = (await assemble(history)).promptSnapshot.messages;
+    const injectedAt = injected.findIndex(item => item.parts.some(part => part.text === depthPrompt.content));
+    const currentAt = injected.findIndex(item => item.parts.some(part => part.text === 'Continue.'));
+    assert.equal(injectedAt, currentAt - 1);
+    preset.prompts.pop();
+    preset.prompt_order[0].order.pop();
 
     // An explicit effort overrides preset omission for this assembly only.
     preset.reasoning_effort = 'low';
     assert.equal((await assemble(history)).promptSnapshot.generationParameters.reasoning_effort, 'low');
     setParamOmitted(preset, 'reasoning_effort', true);
-    assert.equal((await assemble(history, 4096, 'high')).promptSnapshot.generationParameters.reasoning_effort, 'high');
+    assert.equal((await assemble(history, 'high')).promptSnapshot.generationParameters.reasoning_effort, 'high');
     assert.equal((await assemble(history)).promptSnapshot.generationParameters.reasoning_effort, undefined);
-    console.log('PASS: Session PromptManager preserves canonical history, atomic tool groups and bounded Run input');
+    console.log('PASS: Session PromptManager preserves canonical history and depth injections');
 
     const script = getModule('script.js').namespace;
     script.chat_metadata.variables = { sessionValue: 'foreground-chat' };
     script.setCharacterName('Foreground character');
     const sessionPreset = normalizeChatCompletionSettingsForPromptAssembly({
-        chat_completion_source: 'custom', custom_model: 'test-model', openai_max_context: 4096,
-        openai_max_tokens: 32, new_chat_prompt: '',
+        chat_completion_source: 'custom', custom_model: 'test-model', openai_max_tokens: 32, new_chat_prompt: '',
     });
     sessionPreset.prompt_order = structuredClone(preset.prompt_order);
     sessionPreset.prompts.find(prompt => prompt.identifier === 'main').content =
@@ -144,8 +105,10 @@ try {
         const loading = Promise.withResolvers();
         const release = Promise.withResolvers();
         let started;
+        const runId = variables ? 'session-run-explicit' : 'session-run-default';
         const sessions = createAgentSessionsApi({
             promptAssembly: { buildSnapshot: buildPromptAssemblySnapshot },
+            attachAssemblyBridge() {},
             async safeInvoke(command, { dto } = {}) {
                 switch (command) {
                     case 'load_agent_session_profile':
@@ -155,16 +118,17 @@ try {
                     case 'prepare_agent_session_run':
                         return {
                             expectedHistorySeq: 0,
+                            sessionMessages: [message('user', dto.input.text)],
                             request: {
                                 modelId: 'test-model', settings: sessionPreset,
                                 agentContextPolicy: { initialChatHistoryMessages: -1, includeActivatedWorldInfo: false },
                                 agentSystemPrompt: 'Inspect the workspace.',
-                                frozenRunInputSnapshot: sessionInput([message('user', dto.text)]),
+                                frozenRunInputSnapshot: sessionInput([[message('user', dto.input.text)]]),
                             },
                         };
                     case 'start_agent_session_run':
                         started = dto;
-                        return { runId: 'session-run', status: 'created' };
+                        return { runId, status: 'created' };
                     default: throw new Error(`Unexpected Session command: ${command}`);
                 }
             },
@@ -178,8 +142,8 @@ try {
         const expectedLocal = variables ? 'explicit-local' : '';
         assert.ok(started.promptSnapshot.messages.some(item => item.parts.some(part =>
             part.text === `Local=${expectedLocal};Global=captured-global;Char=;Last=Own Session input.`)));
-        assert.deepEqual(started.frozenRunInputSnapshot.variables.local, originalVariables?.local ?? {});
-        assert.deepEqual(started.frozenRunInputSnapshot.variables.global, { globalValue: 'captured-global' });
+        assert.deepEqual(started.promptAssemblyRequest.frozenRunInputSnapshot.variables.local, originalVariables?.local ?? {});
+        assert.deepEqual(started.promptAssemblyRequest.frozenRunInputSnapshot.variables.global, { globalValue: 'captured-global' });
         assert.deepEqual(variables, originalVariables);
         assert.equal(extension_settings.variables.global.globalValue, 'later-live-global');
         assert.equal(script.chat_metadata.variables.sessionValue, 'foreground-chat');

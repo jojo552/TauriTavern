@@ -1,6 +1,7 @@
 // @ts-check
 
 import { createChannel, onHostSessionReset } from '../../../tauri-bridge.js';
+import { encodeBytesToBase64 } from '../binary-utils.js';
 
 /**
  * @param {{
@@ -41,27 +42,33 @@ export function createAgentToolsApi({ safeInvoke, channelFactory = createChannel
             const pending = new Map();
             activeCalls.add(pending);
 
-            /** @param {{ requestId: string; call: Omit<TauriTavernExtensionToolContext, 'signal'> & { arguments: Record<string, TauriTavernJsonValue> } }} event */
+            /** @param {{ requestId: string; call: Omit<TauriTavernExtensionToolContext, 'signal' | 'attachImage'> & { arguments: Record<string, TauriTavernJsonValue> } }} event */
             async function executeCall({ requestId, call }) {
                 const controller = new AbortController();
                 pending.set(requestId, controller);
+                let result;
                 try {
+                    /** @type {Blob[]} */
+                    const attached = [];
                     const value = await execute(call.arguments, {
                         runId: call.runId,
                         invocationId: call.invocationId,
                         callId: call.callId,
                         target: call.target,
                         signal: controller.signal,
+                        attachImage: image => { attached.push(image); },
                     });
-                    if (!pending.has(requestId)) return;
-                    await safeInvoke('resolve_agent_extension_tool_call', {
-                        dto: { requestId, result: { kind: 'value', value: value === undefined ? null : value } },
-                    });
+                    const images = await Promise.all(attached.map(async image => ({ data: encodeBytesToBase64(await image.arrayBuffer()) })));
+                    result = { kind: 'value', value: value === undefined ? null : value, images };
+                    // Classify local serialization failure before attempting the one result submission.
+                    JSON.stringify(result);
                 } catch (error) {
+                    result = { kind: 'error', message: error instanceof Error ? error.message : String(error) };
+                }
+                try {
                     if (!pending.has(requestId)) return;
-                    await safeInvoke('resolve_agent_extension_tool_call', {
-                        dto: { requestId, result: { kind: 'error', message: error instanceof Error ? error.message : String(error) } },
-                    });
+                    // A lost receipt may mean this result already committed. Never submit an error in its place.
+                    await safeInvoke('resolve_agent_extension_tool_call', { dto: { requestId, result } });
                 } finally {
                     pending.delete(requestId);
                 }

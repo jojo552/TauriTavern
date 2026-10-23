@@ -718,3 +718,30 @@ fn claude_json_output_coexists_with_thinking_and_tools() {
     assert_eq!(request["tools"].as_array().unwrap().len(), 1);
     assert!(request.get("tool_choice").is_none());
 }
+
+#[test]
+fn tool_result_images_are_preserved() {
+    let payload = json!({"model":"claude-sonnet-4-5", "tools":[{"type":"function","function":{"name":"capture","parameters":{"type":"object"}}}],
+            "messages":[
+                {"role":"user","content":"capture"},
+                {"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"capture","arguments":"{}"}}]},
+                {"role":"tool","tool_call_id":"call_1","name":"capture","content":[{"type":"text","text":"screen"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}
+            ]}).as_object().unwrap().clone();
+    let expected = json!([{"type":"text","text":"screen"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]);
+    for use_tools in [true, false] {
+        let mut payload = payload.clone();
+        if !use_tools {
+            payload.remove("tools");
+        }
+        let (_, upstream) = build(payload).unwrap();
+        let message = upstream["messages"].as_array().unwrap().last().unwrap();
+        assert_eq!(message["role"], "user");
+        let content = if use_tools {
+            assert_eq!(message["content"][0]["type"], "tool_result");
+            &message["content"][0]["content"]
+        } else {
+            &message["content"]
+        };
+        assert_eq!(content, &expected);
+    }
+}

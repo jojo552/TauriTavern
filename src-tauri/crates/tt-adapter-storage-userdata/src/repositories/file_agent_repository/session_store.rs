@@ -7,11 +7,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use tt_adapter_storage_core::file_system::persist_json_file;
 use tt_domain::errors::DomainError;
-use tt_domain::models::agent::profile::AgentProfileDefinition;
+use tt_domain::models::agent::AgentModelRole;
+use tt_domain::models::agent::profile::{AgentProfileDefinition, deserialize_profile_definition};
 use tt_domain::models::agent::session::{
-    AgentSession, AgentSessionMessage, AgentSessionMessageOrigin,
+    AgentSession, AgentSessionMessage, NewAgentSessionMessage,
 };
-use tt_domain::models::agent::{AgentModelMessage, AgentModelRole};
 use tt_ports::repositories::agent_run_repository::AgentRunRepository;
 use tt_ports::repositories::agent_session_repository::{
     AgentSessionMessageReadQuery, AgentSessionRepository,
@@ -23,7 +23,18 @@ use super::run_prune_store::remove_index_file_if_exists;
 #[async_trait]
 impl AgentSessionRepository for FileAgentRepository {
     async fn load_session_profile(&self) -> Result<Option<AgentProfileDefinition>, DomainError> {
-        Self::try_read_json(&self.root.join("sessions/profile.json")).await
+        let path = self.root.join("sessions/profile.json");
+        let Some(value) = Self::try_read_json::<serde_json::Value>(&path).await? else {
+            return Ok(None);
+        };
+        deserialize_profile_definition(value)
+            .map(Some)
+            .map_err(|error| {
+                DomainError::InvalidData(format!(
+                    "Invalid Agent session profile in {}: {error}",
+                    path.display()
+                ))
+            })
     }
 
     async fn save_session_profile(
@@ -174,11 +185,15 @@ impl AgentSessionRepository for FileAgentRepository {
     async fn append_session_message(
         &self,
         session_id: &str,
-        run_id: &str,
-        message: &AgentModelMessage,
-        origin: Option<&AgentSessionMessageOrigin>,
+        entry: NewAgentSessionMessage,
     ) -> Result<AgentSessionMessage, DomainError> {
-        let run = self.load_run(run_id).await?;
+        let NewAgentSessionMessage {
+            run_id,
+            message,
+            origin,
+            compaction,
+        } = entry;
+        let run = self.load_run(&run_id).await?;
         if run.target.session_id() != Some(session_id) {
             return Err(DomainError::InvalidData(format!(
                 "Agent run {run_id} does not belong to session {session_id}"
@@ -196,10 +211,11 @@ impl AgentSessionRepository for FileAgentRepository {
             .ok_or_else(|| DomainError::InvalidData("Session message sequence exhausted".into()))?;
         let entry = AgentSessionMessage {
             seq,
-            run_id: run_id.to_owned(),
+            run_id,
             created_at: Utc::now(),
-            message: message.clone(),
-            origin: origin.cloned(),
+            message,
+            origin,
+            compaction,
         };
         let mut line = serde_json::to_vec(&entry).map_err(|error| {
             DomainError::InvalidData(format!("Invalid session message: {error}"))
@@ -228,8 +244,8 @@ impl AgentSessionRepository for FileAgentRepository {
             .lock()
             .await
             .insert(session_id.to_owned(), seq);
-        if message.role == AgentModelRole::User {
-            session.record_user_message(message, entry.created_at);
+        if entry.message.role == AgentModelRole::User && entry.origin.is_none() {
+            session.record_user_message(&entry.message, entry.created_at);
             persist_json_file(
                 &self.session_dir(session_id)?.join("session.json"),
                 &session,

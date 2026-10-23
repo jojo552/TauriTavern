@@ -1,3 +1,4 @@
+pub mod builtin_skills;
 pub mod bundled_resources;
 pub mod chat_directory_identity;
 mod chat_format_importers;

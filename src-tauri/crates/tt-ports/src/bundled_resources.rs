@@ -10,10 +10,10 @@ pub trait BundledResources: Send + Sync {
     /// other failures must not be replaced with empty bytes or another source.
     fn read_bytes(&self, relative_path: &str) -> Result<Vec<u8>, DomainError>;
 
-    /// List files recursively beneath a directory prefix in `default/content`.
-    /// Results are sorted, slash-separated paths relative to `default/content`,
-    /// including the prefix itself (for example `sprites/Alice/happy.png`).
-    /// An empty prefix lists all default content files. A prefix with no files
-    /// returns an empty list; manifest or IO failures must be propagated.
-    fn list_default_content_files_under(&self, prefix: &str) -> Result<Vec<String>, DomainError>;
+    /// List files recursively beneath a prefix in `default/<root>` (`content` or `skills`).
+    /// Results are sorted, slash-separated paths relative to that root, including
+    /// the prefix itself (for example `sprites/Alice/happy.png` under `content`).
+    /// An empty prefix lists all files in the root. A prefix with no files returns
+    /// an empty list; manifest or IO failures must be propagated.
+    fn list_default_files_under(&self, root: &str, prefix: &str) -> Result<Vec<String>, DomainError>;
 }

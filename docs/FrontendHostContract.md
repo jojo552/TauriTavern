@@ -1,6 +1,6 @@
 # Frontend Host Contract（TauriTavern）
 
-> 目的：把“宿主平台层（Host Kernel）对外承诺的行为”显式化，避免重构 `src/tauri/main/*` 时误伤上游 SillyTavern / 第三方扩展 / 重脚本 / 角色卡。  
+> 目的：把“宿主平台层（Host Kernel）对外承诺的行为”显式化，避免重构 `src/tauri/main/*` 时误伤上游 SillyTavern / 第三方扩展 / 重脚本 / 角色卡。
 > 范围：覆盖前端宿主层（原生 WebView 或浏览器内运行的 Host Kernel）对外可观察的契约；不描述 Rust 后端内部实现。
 > 参考：[FrontendGuide](FrontendGuide.md)（集成架构与开发方式）；[BrowserHost](CurrentState/BrowserHost.md)（HTTP transport、文件传输与当前能力边界）
 
@@ -61,7 +61,7 @@
 
 浏览器宿主通过独立 `/login` 页面和同源 JSON 登录接口取得 HttpOnly 认证 Cookie，不再使用 HTTP Basic 弹窗或 Header fallback。未登录文档导航进入登录页；API/静态/下载拒绝访问而不返回登录 HTML。认证失效与页面 session reset 是不同事实：前者终止旧 transport，经独立登录入口处理，后者可重建声明式页面状态。已有页面认证失效时不自动导航丢失未保存内容；登录不会自动重放旧请求或恢复旧句柄。账号仍由宿主 CLI 单用户配置，原生宿主与上游账户兼容 API 不受影响。详细安全/退出/生命周期协议见 [BrowserHost §2](CurrentState/BrowserHost.md#2-认证页面-session-与-csrf)。
 
-浏览器 transport 的明确网络失败共用退避恢复，认证/协议/业务失败不静默降级。`waitUntilWebConnected({signal})` 仅等待匹配的新 ready，取消只撤销等待者；`recoverWebConnection()` 仅唤醒唯一连接路径，均不重放 invoke。网络错误和页面 session 重置使用不同结构化错误；保存、模型 start、工具和未知副作用不自动重试。完整协议和边界见 [BrowserHost §3](CurrentState/BrowserHost.md#3-http-bytes-sse-与-channel)。
+浏览器 transport 的明确网络失败共用退避恢复，认证/协议/业务失败不静默降级。工具回执与提示词组装结果在本地构建失败时可以提交明确错误；提交请求本身失败或确认丢失时不再补发另一份错误回执，避免把未知结果当成未执行。`waitUntilWebConnected({signal})` 仅等待匹配的新 ready，取消只撤销等待者；`recoverWebConnection()` 仅唤醒唯一连接路径，均不重放 invoke。网络错误和页面 session 重置使用不同结构化错误；保存、模型 start、工具和未知副作用不自动重试。完整协议和边界见 [BrowserHost §3](CurrentState/BrowserHost.md#3-http-bytes-sse-与-channel)。
 
 可恢复普通生成以原响应进入共同解析/完成管线，重新打开不会重入 Generate 的前置命令或提示词链。恢复不重发历史 token 事件、不自动调用工具/续写/auto-swipe；首次未保存的回复保留既有终态消息事件与保存顺序，已从盘读到 job 完成标记的回复不重复应用。未承诺扩展事件跨崩溃 exactly-once，也不改变 Agent/native 生命周期或新增公开插件 ABI。
 
@@ -127,7 +127,7 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
   - `invoke.safeInvoke(...)` / `invoke.flushAll()`：对 `context` invoke 能力的稳定包装。
   - `assets.thumbnailUrl` / `assets.backgroundPath`：对 3.1 中稳定 Host Resource URL helper 的统一引用。
   - `iosPolicy`（Project）：iOS 分发策略的启动快照，见 `docs/CurrentState/iOSPolicy.md`。
-  - `api.layout`：读取与订阅当前内容视口。原生遮挡由原生层先消费；浏览器宿主读取 `visualViewport`（缺少时用 `innerWidth/innerHeight`），不依赖原生窗口快照或背景发布。见 [API/Layout.md](API/Layout.md)。
+  - `api.layout`：读取与订阅当前内容视口。原生遮挡由原生层先消费；HTTP 浏览器读取 `visualViewport`（缺少时用 `innerWidth/innerHeight`），不依赖原生窗口快照或背景发布。`capture()` 是第一方使用的 Project Contract：原生读取内容视口像素，Studio 与独立 HTTP 不支持原生截图时明确拒绝，不返回空白图或伪成功。见 [API/Layout.md](API/Layout.md)。
   - `api.chat`：TauriTavern 独有的聊天/记忆类扩展 API（聊天摘要、元数据、历史分页、稳定存储、后端定位、纯文本检索）。
     - 详细签名与示例见：`docs/API/Chat.md`。
   - `api.characterCards`：选择本地角色卡，以及接管卡内的世界书。原生宿主使用原生选择器；浏览器在用户激活内调用 DOM 文件输入框；世界书操作共用同一命令路径。
@@ -189,11 +189,12 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
 - `openEntry()` 必须复用上游 World Info 模块自身的导航能力；宿主 ABI 层不得直接依赖 `#WorldInfo`、`#world_editor_select`、`[uid=\"...\"]` 等 DOM 细节。
 
 - `api.agent`：运行控制、历史、工作区详情与 Profile 管理，见 [Agent API](API/Agent.md)。
-  - Chat 与 Session 共用 PromptManager、统一的 Agent snapshot 和 Rust 模型/工具循环；Run 事件与实时投影独立于 SillyTavern 生成事件。
+  - Chat 与 Session 接受统一的 Agent snapshot；Run 事件与实时投影独立于 SillyTavern 生成事件。
   - Chat 使用稳定聊天身份，宿主提交桥复用聊天保存流程；保存成功或明确失败后释放生成状态。续接保留 Run 身份，分叉创建新聊天身份并复制持久版本。
-  - Session 独立于当前角色聊天和写作生成状态，不发出 SillyTavern 聊天/生成事件；目录、共享配置与连续历史由后端管理。Agent Mode 只控制 Chat 的 Agent/Legacy 路由。
+  - Session 独立于当前角色聊天和写作生成状态，不发出 SillyTavern 聊天/生成事件；目录、共享配置与连续历史由后端管理，提示词与宏环境见 [Prompt assembly](Agent/PromptAssembly.md)。Agent Mode 只控制 Chat 的 Agent/Legacy 路由。
   - 扩展工具通过 `tools.register/setEnabled/list` 注册、开关与查询，按 Chat/Session 筛选，共用 Agent 工具执行链路；用法见 [注册扩展工具](API/Agent.md#注册扩展工具)。
   - 运行控制属于 Public Contract；模型回合、任务详情、工具目录和 Timeline 关系是 Project Contract，由对应 API 提供展示 DTO。
+  - Session 历史中的 `compaction`、运行状态 `compacting_context`、`context_compaction_started` / `context_compacted` 事件与 `model_request_created` 的 `context`、`sessions.compact()`，以及 Agent 快照的 `contextLimits: { context, response, tokenizerModel }` 均为 Project Contract；字段与事件形状见 [Agent API](API/Agent.md)。
 
 - `api.llmConnections`：管理 Profile 引用的模型连接，见 [LLM Connection API](API/LlmConnections.md)。Profile 通过连接 ID 和模型 ID 绑定；Model Target 是界面的配置来源。
 

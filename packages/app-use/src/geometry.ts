@@ -4,7 +4,9 @@ import { preview } from './semantics.ts';
 import type { Semantics } from './semantics.ts';
 import { appToolAliases } from './names.ts';
 
-const { interact: INTERACT, evaluate: EVALUATE } = appToolAliases;
+export type Rect = { x: number; y: number; width: number; height: number };
+
+const { evaluate: EVALUATE } = appToolAliases;
 
 export type InteractionPoint = { x: number; y: number };
 type Bounds = { left: number; right: number; top: number; bottom: number };
@@ -17,27 +19,18 @@ export function inspectInputSurface(element: HTMLElement, scope: DocumentScope, 
     if (!semantics.isVisible(element)) {
         return { reason: `${identify(element, semantics)} is hidden or has no visible size. Open or restore its panel, then observe again.` };
     }
-    const mappings = [...scope.frames].reverse().map(frameMapping);
     let outsideDocument = scope.document;
     let missed: MissedHit | null = null;
 
     // ponytail: one point per client rect; add richer geometry only for observed partial-overlay failures.
     for (const rect of Array.from(element.getClientRects())) {
         if (rect.width <= 0 || rect.height <= 0) continue;
-        let visible = clipToViewport(rect, scope.document);
-        if (!visible) outsideDocument = scope.document;
-        for (const mapping of mappings) {
-            if (!visible) break;
-            visible = clipToViewport({
-                left: mapping.x + visible.left * mapping.scaleX,
-                right: mapping.x + visible.right * mapping.scaleX,
-                top: mapping.y + visible.top * mapping.scaleY,
-                bottom: mapping.y + visible.bottom * mapping.scaleY,
-            }, mapping.frame.ownerDocument);
-            if (!visible) outsideDocument = mapping.frame.ownerDocument;
+        const mapped = toTopViewport(rect, scope);
+        if ('outside' in mapped) {
+            outsideDocument = mapped.outside;
+            continue;
         }
-        if (!visible) continue;
-
+        const { bounds: visible, mappings } = mapped;
         const point = { x: (visible.left + visible.right) / 2, y: (visible.top + visible.bottom) / 2 };
         const obstruction = findMissedHit(point, mappings, element);
         if (!obstruction) return { point };
@@ -45,6 +38,40 @@ export function inspectInputSurface(element: HTMLElement, scope: DocumentScope, 
     }
     if (missed) return { reason: describeMissedHit(missed, semantics) };
     return { reason: `${identify(element, semantics)} is outside the visible area of ${identifyPage(outsideDocument, semantics)}. Scroll its containing region, then observe again.` };
+}
+
+export function toTopViewport(bounds: Bounds, scope: DocumentScope):
+    { bounds: Bounds; clipped: boolean; mappings: FrameMapping[] } | { outside: Document } {
+    let clipped = false;
+    const clip = (doc: Document) => {
+        const visible = clipToViewport(bounds, doc);
+        if (!visible) return false;
+        clipped ||= visible.left !== bounds.left || visible.right !== bounds.right || visible.top !== bounds.top || visible.bottom !== bounds.bottom;
+        bounds = visible;
+        return true;
+    };
+    if (!clip(scope.document)) return { outside: scope.document };
+    const mappings: FrameMapping[] = [];
+    for (const frame of [...scope.frames].reverse()) {
+        const mapping = frameMapping(frame);
+        mappings.push(mapping);
+        bounds = {
+            left: mapping.x + bounds.left * mapping.scaleX,
+            right: mapping.x + bounds.right * mapping.scaleX,
+            top: mapping.y + bounds.top * mapping.scaleY,
+            bottom: mapping.y + bounds.bottom * mapping.scaleY,
+        };
+        if (!clip(frame.ownerDocument)) return { outside: frame.ownerDocument };
+    }
+    return { bounds, clipped, mappings };
+}
+
+export function intersects(a: Rect, b: Rect): boolean {
+    return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+export function contains(outer: Rect, inner: Rect): boolean {
+    return outer.x <= inner.x && outer.y <= inner.y && outer.x + outer.width >= inner.x + inner.width && outer.y + outer.height >= inner.y + inner.height;
 }
 
 function clipToViewport(bounds: Bounds, doc: Document): Bounds | null {
@@ -103,7 +130,7 @@ function frameMapping(frame: HTMLIFrameElement): FrameMapping {
         const rotated = style.rotate && style.rotate !== 'none' && Number.parseFloat(style.rotate) !== 0;
         const flipped = style.scale && style.scale !== 'none' && style.scale.split(/\s+/).some(value => Number(value) <= 0);
         if (!matrix.is2D || matrix.b !== 0 || matrix.c !== 0 || matrix.a <= 0 || matrix.d <= 0 || rotated || flipped) {
-            throw new Error(`No action was performed: this embedded page has a rotation, skew, or 3D transform that ${INTERACT} cannot map reliably. Use ${EVALUATE} with a known API for this control.`);
+            throw new Error(`Nothing was done: this embedded page has a rotation, skew, or 3D transform that cannot be mapped to the screen reliably. Use ${EVALUATE} with a known API instead.`);
         }
     }
 

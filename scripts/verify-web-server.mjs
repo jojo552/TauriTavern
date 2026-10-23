@@ -15,6 +15,7 @@ if (!releaseArg || !expectedRevision || !expectedBranch) {
     throw new Error('usage: verify-web-server.mjs <release dir> <revision> <branch>');
 }
 const release = path.resolve(releaseArg);
+const expectedVersion = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 assert.equal((await fs.readFile(path.join(release, 'SOURCE_COMMIT'), 'utf8')).trim(), expectedRevision);
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tt-release-verify-'));
 const base = 'http://127.0.0.1:18002';
@@ -165,6 +166,12 @@ try {
     const version = await versionReply.json();
     assert.equal(version.gitRevision, expectedRevision, 'Binary revision must match SOURCE_COMMIT');
     assert.equal(version.gitBranch, expectedBranch);
+    assert.equal(version.tauriVersion, expectedVersion, 'HTTP and native hosts report the same application release');
+    // New Agent UI restoration reads the real shared runtime before attaching its
+    // assembly bridges. A packaged HTTP host must expose it without starting a model.
+    const activeRuns = await invoke('list_active_agent_runs');
+    assert.equal(activeRuns.status, 200);
+    assert.deepEqual(await activeRuns.json(), []);
     // Beyond the receiver's eight-slot capacity: malformed finishes must stay abortable and
     // must not leave hidden receiving sessions behind. Synthetic bytes are never published.
     for (let i = 0; i < 9; i++) {

@@ -115,7 +115,7 @@ impl FileContentRepository {
         let resources = self.bundled_resources.clone();
         let prefix = filename.to_string();
         let entries = tokio::task::spawn_blocking(move || {
-            resources.list_default_content_files_under(&prefix)
+            resources.list_default_files_under("content", &prefix)
         })
         .await
         .map_err(|error| {

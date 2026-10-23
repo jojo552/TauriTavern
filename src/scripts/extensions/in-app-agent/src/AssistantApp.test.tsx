@@ -26,7 +26,7 @@ function harness() {
     let snapshot: AssistantSnapshot = {
         initialized: true, profile, profileSaved: true, busy: false, error: null,
         sessionId: 'session', messages: [], nextBeforeSeq: null, run: null, events: [], responses: [],
-        loading: false, draft: '', activeRun: null, sendingSessionId: undefined,
+        loading: false, draft: '', activeRun: null, startingSessionId: undefined,
         sessions: [{ id: 'session', title: 'Test conversation', createdAt: '2026-09-22T12:00:00Z', lastUsedAt: null }],
     };
     const listeners = new Set<() => void>();
@@ -34,7 +34,7 @@ function harness() {
     const sendMessage = vi.fn(() => Promise.resolve<TauriTavernAgentSessionRunHandle>({ runId: 'run', sessionId: 'session', status: 'calling_model', createdAt: '2026-09-22T12:00:00Z' }));
     const controller: AssistantController = {
         getSnapshot: () => snapshot, subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-        initialize: () => Promise.resolve(), saveProfile: () => Promise.resolve(), send: sendMessage,
+        initialize: () => Promise.resolve(), saveProfile: () => Promise.resolve(), send: sendMessage, compact: sendMessage,
         selectSession: () => Promise.resolve(), newSession: () => Promise.resolve(),
         setDraft: text => publish({ draft: text }),
         refreshSessions: () => Promise.resolve(),
@@ -49,7 +49,8 @@ function harness() {
         copy: () => Promise.resolve(), openLink: () => Promise.resolve(), markdown: text => text,
         isMobile: () => true, shouldSendOnEnter: () => true,
         isMobileHost: () => false,
-        loadOptions: () => Promise.resolve({ presets: ['Default'], tools: [], diagnostics: [], skills: [] }),
+        loadOptions: () => Promise.resolve({ presets: ['Agent'], tools: [], diagnostics: [], skills: [] }),
+        readImage: () => Promise.reject(new Error('No image result')),
         readResult: () => Promise.reject(new Error('No external result')), openConnections: () => {},
         confirmDeleteSession: () => Promise.resolve(true),
     };
@@ -233,10 +234,72 @@ test('paging skips collapsed rows, preserves the visible anchor, and never follo
     expect(visibleOffset()).toBe(before);
 });
 
+test('compaction stays in run order, opens its summary, and preserves a reader’s scroll position', () => {
+    const h = harness();
+    const entry = (seq: number, role: 'user' | 'assistant', text: string): TauriTavernAgentSessionMessage => ({
+        seq, runId: 'run', createdAt: '',
+        ...(role === 'assistant' ? { origin: { invocationId: 'root', round: seq } } : {}),
+        message: { role, providerMetadata: null, parts: [{ type: 'text', text }] },
+    });
+    h.publish({ messages: [entry(1, 'user', 'Question'), entry(2, 'assistant', 'Earlier work')] });
+    const view = render(<Transcript snapshot={h.snapshot} controller={h.controller} actions={h.actions} visible />);
+    const root = screen.getByRole('region', { name: 'Conversation' });
+    Object.defineProperties(root, { scrollHeight: { value: 1000 }, clientHeight: { value: 300 } });
+    root.scrollTop = 120;
+    fireEvent.scroll(root);
+    h.publish({ messages: [...h.snapshot.messages, {
+        seq: 3, runId: 'run', createdAt: '', origin: { invocationId: 'root', round: 4 },
+        compaction: { keptFromSeq: 1, tokensBefore: 7000, tokensAfter: 1000 },
+        message: { role: 'user', providerMetadata: null, parts: [{ type: 'text', text: 'Earlier context' }, { type: 'text', text: 'Summary notes' }] },
+    }] });
+    view.rerender(<Transcript snapshot={h.snapshot} controller={h.controller} actions={h.actions} visible />);
+    expect(root.scrollTop).toBe(120);
+    h.publish({ messages: [...h.snapshot.messages, entry(4, 'assistant', 'Next answer')] });
+    view.rerender(<Transcript snapshot={h.snapshot} controller={h.controller} actions={h.actions} visible />);
+    const compacted = screen.getByRole('button', { name: /Compacted context/ });
+    expect(screen.getByText('Earlier work').compareDocumentPosition(compacted) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(compacted.compareDocumentPosition(screen.getByText('Next answer')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(compacted);
+    expect(compacted.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Summary notes')).toBeTruthy();
+});
+
+for (const { visible, deny, checked, nextVisible, nextDeny } of [
+    { visible: ['*'], deny: [], checked: true, nextVisible: ['*'], nextDeny: ['test-skill'] },
+    { visible: ['test-skill', 'missing-skill'], deny: [], checked: true, nextVisible: ['missing-skill'], nextDeny: [] },
+    { visible: [], deny: [], checked: false, nextVisible: ['test-skill'], nextDeny: [] },
+]) test(`Skill selection preserves visible ${JSON.stringify(visible)} and deny ${JSON.stringify(deny)}`, async () => {
+    document.body.innerHTML = '<div id="advanced-formatting-button" class="drawer"><div class="drawer-toggle"><div class="drawer-icon"></div></div><div id="AdvancedFormatting" class="drawer-content openDrawer"></div></div>';
+    const drawer = installAssistantDrawer(drawers);
+    const h = harness();
+    h.snapshot.profile.skills = { visible, deny };
+    const saveProfile = vi.fn(() => Promise.resolve());
+    h.controller.saveProfile = saveProfile;
+    h.actions.loadOptions = () => Promise.resolve({ presets: ['Agent'], tools: [], diagnostics: [], skills: [
+        { scope: { kind: 'builtin' }, name: 'test-skill', description: 'Test reference', tags: [], installedHash: 'hash',
+            fileCount: 1, totalBytes: 12, hasScripts: false, hasBinary: false, installedAt: '' },
+    ] });
+    render(<AssistantApp controller={h.controller} actions={h.actions} drawer={drawer} />, { container: drawer.mount });
+    fireEvent.click(screen.getByRole('button', { name: 'Assistant settings' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Skill/ }));
+    const checkbox = screen.getByRole<HTMLInputElement>('checkbox', { name: /test-skill/ });
+    expect(checkbox.checked).toBe(checked);
+    expect(screen.getByText('Built-in')).toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: '*' })).toBeNull();
+    if (visible.includes('missing-skill')) expect(screen.getByRole('checkbox', { name: /missing-skill/ })).toBeTruthy();
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+    await waitFor(() => expect(saveProfile).toHaveBeenCalledWith(expect.objectContaining({ skills: { visible: nextVisible, deny: nextDeny } })));
+    drawer.dispose();
+});
+
 test('cancelling settings releases an unconfirmed Skill import and saving waits for its selection', async () => {
     document.body.innerHTML = '<div id="advanced-formatting-button" class="drawer"><div class="drawer-toggle"><div class="drawer-icon"></div></div><div id="AdvancedFormatting" class="drawer-content openDrawer"></div></div>';
     const drawer = installAssistantDrawer(drawers);
     const h = harness();
+    h.snapshot.profile.skills.deny = ['test-skill'];
+    const saveProfile = vi.fn(() => Promise.resolve());
+    h.controller.saveProfile = saveProfile;
     let importing = false;
     const input: TauriTavernSkillImportInput = { kind: 'inlineFiles', files: [] };
     const preview: TauriTavernSkillImportPreview = {
@@ -249,7 +312,8 @@ test('cancelling settings releases an unconfirmed Skill import and saving waits 
         importing = true;
         return () => { importing = false; return Promise.resolve(); };
     }, pickImportArchives: () => Promise.resolve([input]),
-        discoverImports: () => Promise.resolve([input]), previewImport: () => Promise.resolve(preview) };
+        discoverImports: () => Promise.resolve([input]), previewImport: () => Promise.resolve(preview),
+        installImport: () => Promise.resolve({ scope: preview.skill.scope, name: preview.skill.name, action: 'installed' }) };
     const view = render(<AssistantApp controller={h.controller} actions={h.actions} drawer={drawer} />, { container: drawer.mount });
     const editStreaming = () => {
         fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }));
@@ -272,5 +336,9 @@ test('cancelling settings releases an unconfirmed Skill import and saving waits 
     fireEvent.click(screen.getByRole('button', { name: 'Import ZIP' }));
     await screen.findByText('test-skill');
     expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Install and select' }));
+    await waitFor(() => expect(screen.getByRole<HTMLInputElement>('checkbox', { name: /test-skill/ }).checked).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+    await waitFor(() => expect(saveProfile).toHaveBeenCalledWith(expect.objectContaining({ skills: { visible: ['*'], deny: [] } })));
     drawer.dispose();
 });

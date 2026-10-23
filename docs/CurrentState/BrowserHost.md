@@ -105,6 +105,16 @@ install -d -m 700 "$AUTH_DIR"
 - 最终消息携带 `extra.tauritavern.browserGeneration={jobId,completed:true}`，沿既有 final events → chat save → job ACK 完成。再次发现完成标记会通过既有聊天 history API 核对实际落盘标记后才确认释放，不重复应用回复或事件；CHAT_CHANGED 可能只是同页内容刷新，既不证明保存成功，也不无条件中止同聊天的附着。事件到保存之间崩溃仍可能使扩展完成事件重复，不能声称跨崩溃 exactly-once；聊天保存失败/拒绝覆盖不得 ACK。任务不会独立自动写聊天，关闭页后的结果等重开、核对并保存后才发布。
 - 浏览器仅持久记录 jobId/chatRef 发现索引，不记录提示词、聊天全文或凭据。服务器进程重启销毁内存任务，旧索引让失效可见；不自动重新生成。Agent run/checkpoint/live UI 的生命周期与此独立，不能由普通生成恢复推出 Agent 自动续跑。
 
+### 3.2 Agent、工具图片与内置知识
+
+HTTP 的 Agent Session、手动/自动上下文压缩、上下文用量和运行事件复用同一 `AgentRuntimeService`，不是 Studio 的默认 Profile 或空运行列表。页面重开通过真实活跃 Run 列表恢复组装桥；这不代表自动重放工具或恢复已经失效的页面句柄，普通生成的恢复规则仍见上节。
+
+MCP 图片与扩展 `context.attachImage(blob)` 沿共同工具结果协议进入共享图片规范化、工作区存储和模型投影。Transcript 通过 `read_agent_workspace_bytes` 的原始字节读取展示已保存图片，不把 JSON 数字数组当文件，也不新增原生 fs/plugin 模拟。文本审计与图片引用的语义见 [Agent 工具](../Agent/ToolSystem.md)。
+
+Session 的内置只读知识随发布包的 `resources/default/skills/` 交付；原生与 HTTP 都通过共享资源 port 和同一文件仓库物化，内容由包内文件决定，不从网络或旧缓存猜测。内置知识不进入用户 Skill Manager，不与用户可编辑包混在一起；作用域和覆盖规则见 [Skill](../Agent/Skill.md)。内置文档由当前分支的 `docs/` 生成，包含独立 HTTP 与 Studio 各自的边界。
+
+原生视口截图仍属于原生宿主能力。HTTP 没有本地 WebView 像素接口，`api.layout.capture()` 明确拒绝，不把 DOM 观察或空白 PNG 当成真实截图；工具图片传输可用也不意味着截图能力存在。
+
 ## 4. 文件传输与隔离边界
 
 ### 4.1 浏览器选择与 staging

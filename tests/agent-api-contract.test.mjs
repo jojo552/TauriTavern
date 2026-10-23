@@ -182,7 +182,7 @@ async function installHarness(options = {}) {
     globalThis.window.__TAURITAVERN__.api.agent = createAgentApi({
         safeInvoke,
         loadScript: async () => options.script || createFakeStreamingCommitScript().script,
-    });
+    }).api;
 
     return {
         calls,
@@ -1130,6 +1130,44 @@ test('shared agent run event subscription fans out over one backend poller', asy
     );
 });
 
+test('prompt assembly replies once for local outcomes and never replaces a reply with a lost receipt', async t => {
+    const { attachHostPromptAssemblyBridge } = await import('../src/tauri/main/api/agent-prompt-assembly-bridge.js');
+    for (const mode of ['success', 'local-failure', 'lost-receipt']) await t.test(mode, async context => {
+        const replies = [];
+        const submitted = Promise.withResolvers(), reported = Promise.withResolvers();
+        const failure = new Error(mode);
+        context.mock.method(globalThis, 'queueMicrotask', callback => {
+            try { callback(); } catch (error) { reported.resolve(error); }
+        });
+        let dispatch;
+        const runId = `assembly-${mode}`;
+        attachHostPromptAssemblyBridge({
+            runId,
+            subscribe(_runId, callback) { dispatch = callback; return () => {}; },
+            promptAssembly: {
+                async buildSnapshot() {
+                    if (mode === 'local-failure') throw failure;
+                    return { promptSnapshot: { messages: [] }, frozenRunInputSnapshot: {}, generationIntent: {} };
+                },
+            },
+            async safeInvoke(command, { dto }) {
+                if (command === 'read_agent_prompt_assembly_request') return {};
+                assert.equal(command, 'resolve_agent_prompt_assembly');
+                replies.push(dto);
+                submitted.resolve();
+                if (mode === 'lost-receipt') throw failure;
+            },
+        });
+        dispatch({ type: 'prompt_assembly_requested', payload: { assemblyId: 'pending' } });
+        await submitted.promise;
+        if (mode === 'lost-receipt') assert.equal(await reported.promise, failure);
+        dispatch({ type: 'run_completed' });
+        assert.equal(replies.length, 1);
+        assert.equal(replies[0].error, mode === 'local-failure' ? mode : undefined);
+        assert.equal(Object.hasOwn(replies[0], 'promptSnapshot'), mode !== 'local-failure');
+    });
+});
+
 test('Agent presentation survives a stop and reload without duplicating text or reasoning', async () => {
     const chatRef = { kind: 'character', characterId: 'Writer', fileName: 'story' };
     installCurrentChatRef(chatRef);
@@ -1269,7 +1307,7 @@ test('Agent resume attaches from its returned cursor and saves completed present
         calls.push({ command, args });
         if (command === 'read_agent_run_checkpoint') return {
             run: { runId: 'run-resume', generationType: 'swipe', status: 'cancelled' },
-            terminalSeq: 10, presentation, nextStep: 'model', round: 4, maxRounds: 5, blockedReason: null,
+            terminalSeq: 10, presentation, nextStep: 'model', blockedReason: null,
         };
         if (command === 'resume_agent_run') return { runId: 'run-resume', generationType: 'swipe', afterSeq: 10 };
         if (command === 'read_agent_run_events') {
@@ -1288,7 +1326,7 @@ test('Agent resume attaches from its returned cursor and saves completed present
         open: () => ({ stableId: async () => ' stable-story\n' }),
     };
     const savedCheckpoint = await agent.readCheckpoint('run-resume');
-    const handle = await agent.resume({ runId: 'run-resume', additionalRounds: 5, checkpoint: savedCheckpoint });
+    const handle = await agent.resume({ runId: 'run-resume', checkpoint: savedCheckpoint });
     const settling = agent.settleChatPresentation(handle);
     const checkpoint = await saved;
     await settling;
@@ -1299,7 +1337,7 @@ test('Agent resume attaches from its returned cursor and saves completed present
     assert.deepEqual(checkpoint.presentation.reasoning.turns, [{ invocationId: 'inv_root', round: 4, maxChars: 17 }]);
     assert.equal(calls.filter(call => call.command === 'finish_agent_run_presentation').length, 1);
     assert.deepEqual(calls.find(call => call.command === 'resume_agent_run').args.dto, {
-        runId: 'run-resume', expectedTerminalSeq: 10, chatRef, stableChatId: ' stable-story\n', additionalRounds: 5, hostPresentation: true,
+        runId: 'run-resume', expectedTerminalSeq: 10, chatRef, stableChatId: ' stable-story\n', hostPresentation: true,
     });
 });
 
@@ -1381,7 +1419,7 @@ test('Checkpoint publication can be retried through the Agent API after failure'
     const { agent } = await installHarness({ script, safeInvoke: async (command, args) => {
         if (command === 'read_agent_run_checkpoint') return {
             run: { runId: 'run-save-retry', status: 'cancelled' },
-            terminalSeq: 10, presentation, nextStep: 'model', round: 2, maxRounds: 5,
+            terminalSeq: 10, presentation, nextStep: 'model',
         };
         if (command === 'resume_agent_run') return { runId: 'run-save-retry', afterSeq: 10 };
         if (command === 'read_agent_run_events') return { events: [

@@ -14,6 +14,7 @@ use tt_application::services::llm_connection_service::LlmConnectionService;
 use tt_application::services::mcp_service::McpService;
 use tt_application::services::prompt_assembly_service::PromptAssemblyService;
 use tt_application::services::skill_service::SkillService;
+use tt_application::services::tokenization_service::TokenizationService;
 use tt_ports::extension_tools::ExtensionTools;
 use tt_ports::workspace_shell::WorkspaceShell;
 
@@ -29,15 +30,28 @@ pub(crate) struct AgentServices {
     pub(crate) agent_workspace_lifecycle_service: Arc<AgentWorkspaceLifecycleService>,
 }
 
-pub(crate) fn build(
-    repositories: &Repositories,
-    skill_service: Arc<SkillService>,
-    chat_completion_service: Arc<ChatCompletionService>,
-    llm_connection_service: Arc<LlmConnectionService>,
-    mcp_service: Arc<McpService>,
-    workspace_shell: Arc<dyn WorkspaceShell>,
-    extension_tools: Arc<dyn ExtensionTools>,
-) -> AgentServices {
+pub(crate) struct AgentDependencies {
+    pub(crate) skill_service: Arc<SkillService>,
+    pub(crate) chat_completion_service: Arc<ChatCompletionService>,
+    pub(crate) llm_connection_service: Arc<LlmConnectionService>,
+    pub(crate) mcp_service: Arc<McpService>,
+    pub(crate) tokenization_service: Arc<TokenizationService>,
+    pub(crate) workspace_shell: Arc<dyn WorkspaceShell>,
+    pub(crate) extension_tools: Arc<dyn ExtensionTools>,
+    pub(crate) tool_image_normalizer: Arc<dyn tt_ports::tool_images::ToolImageNormalizer>,
+}
+
+pub(crate) fn build(repositories: &Repositories, dependencies: AgentDependencies) -> AgentServices {
+    let AgentDependencies {
+        skill_service,
+        chat_completion_service,
+        llm_connection_service,
+        mcp_service,
+        tokenization_service,
+        workspace_shell,
+        extension_tools,
+        tool_image_normalizer,
+    } = dependencies;
     let agent_profile_service = Arc::new(AgentProfileService::new(
         repositories.agent_profile_repository.clone(),
         repositories.agent_profile_storage_health_repository.clone(),
@@ -62,15 +76,15 @@ pub(crate) fn build(
         repositories.chat_repository.clone(),
         repositories.group_chat_repository.clone(),
         skill_service,
-        Arc::new(ChatCompletionAgentModelGateway::new(
-            chat_completion_service,
-        )),
+        Arc::new(ChatCompletionAgentModelGateway::new(chat_completion_service)),
         agent_profile_service.clone(),
         llm_connection_service,
         prompt_assembly_service.clone(),
         mcp_service,
         workspace_shell,
         extension_tools,
+        tokenization_service,
+        tool_image_normalizer,
     ));
     let agent_run_history_service = Arc::new(AgentRunHistoryService::new(
         repositories.agent_run_repository.clone(),

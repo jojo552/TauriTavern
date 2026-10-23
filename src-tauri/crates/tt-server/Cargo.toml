@@ -1,6 +1,6 @@
 [package]
 name = "tt-server"
-version = "2.3.0"
+version = "2.4.0"
 edition = "2024"
 description = "Native HTTP/browser host for the shared TauriTavern Rust runtime"
 

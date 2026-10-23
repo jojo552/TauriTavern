@@ -533,6 +533,7 @@ mod tests {
             .register(
                 "page-a",
                 ExtensionToolDefinition {
+                    returns_images: true,
                     extension_id: "probe".into(),
                     name: "echo".into(),
                     description: "Echo".into(),
@@ -570,12 +571,16 @@ mod tests {
         let request_id = frame["payload"]["requestId"].as_str().unwrap().to_string();
         let reply = ExtensionToolReply::Value {
             value: json!({ "ok": true }),
+            images: vec![tt_contracts::extension_tools::ExtensionToolImage {
+                data: "AAEC".into(),
+            }],
         };
         assert!(!bridge.resolve("page-b", &request_id, reply.clone()));
         assert!(bridge.resolve("page-a", &request_id, reply));
         assert!(matches!(
             call.await.unwrap(),
-            Ok(ExtensionToolReply::Value { .. })
+            Ok(ExtensionToolReply::Value { value, images })
+                if value == json!({ "ok": true }) && images.len() == 1 && images[0].data == "AAEC"
         ));
     }
 }

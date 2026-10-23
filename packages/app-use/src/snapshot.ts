@@ -1,11 +1,16 @@
+import { contains, intersects, toTopViewport } from './geometry.ts';
+import type { Rect } from './geometry.ts';
+import { parseTarget } from './target.ts';
+import type { ElementTarget } from './target.ts';
+import type { CaptureLayout } from './capture.ts';
 import { createSemantics, describeLine, isTextRegion, preview, suppressesText } from './semantics.ts';
 import type { ObservationOptions, Semantics } from './semantics.ts';
 import type { ToolArguments } from './types.ts';
-import { isElement, isHtmlTag, isText, mainDocumentScope, requireCurrentScope } from './document.ts';
+import { isElement, isHtmlTag, isText, documentWindow, mainDocumentScope, requireCurrentScope } from './document.ts';
 import type { DocumentScope } from './document.ts';
 import { appToolAliases } from './names.ts';
 
-const { snapshot: SNAPSHOT, evaluate: EVALUATE } = appToolAliases;
+const { snapshot: SNAPSHOT, interact: INTERACT, capture: CAPTURE, evaluate: EVALUATE } = appToolAliases;
 
 const MAX_NODES = 80;
 const MAX_VISITS = 2_000;
@@ -14,7 +19,6 @@ const MAX_PAGE_CONTENT_PREVIEWS = 4_000;
 export const MAX_DEPTH = 6;
 const SNAPSHOT_SEQUENCE_KEY = 'tauritavern:in_app_agent_snapshot_sequence';
 
-export type ElementTarget = { ref: string } | { selector: string; root?: string | undefined };
 type ResolvedTarget = { element: Element; scope: DocumentScope };
 type TextPreview = { value: string; truncated: boolean };
 type SemanticAncestor = { element: Element; depth: number; textPreview?: TextPreview };
@@ -64,18 +68,26 @@ export function createObservation(options: ObservationOptions = {}) {
     }
 
     function resolveRef(ref: string): ResolvedTarget {
-        const element = references.get(ref);
-        if (!element) {
-            throw new Error(`This ref is not in the current snapshot. Call ${SNAPSHOT} and use a ref from its returned page.`);
-        }
         requireScope(scope);
+        return { element: resolveRefElement(ref), scope };
+    }
+
+    function lookupRef(ref: string): { element: Element } | { problem: string } {
+        const element = references.get(ref);
+        if (!element) return { problem: `This ref is not in the current snapshot. Call ${SNAPSHOT} and use a ref from its returned page.` };
         if (!element.isConnected || element.ownerDocument !== scope.document) {
-            throw new Error(`The target is no longer in this page. Call ${SNAPSHOT} to inspect the current interface before acting.`);
+            return { problem: `The target is no longer in this page. Call ${SNAPSHOT} to inspect the current interface before acting.` };
         }
         if (!semantics().isWithinObservedContent(element)) {
-            throw new Error(`The target is inside a hidden or omitted region. Call ${SNAPSHOT} to find its visible panel or restore control before acting.`);
+            return { problem: `The target is inside a hidden or omitted region. Call ${SNAPSHOT} to find its visible panel or restore control before acting.` };
         }
-        return { element, scope };
+        return { element };
+    }
+
+    function resolveRefElement(ref: string): Element {
+        const found = lookupRef(ref);
+        if ('problem' in found) throw new Error(found.problem);
+        return found.element;
     }
 
     /** The refs of the latest snapshot page, in the order the page lists them. */
@@ -92,6 +104,58 @@ export function createObservation(options: ObservationOptions = {}) {
             : resolveRef(target.root);
         const region = enterFrame(base, current);
         return { element: selectElement(region.element, target.selector, current), scope: region.scope };
+    }
+
+    function captureLayout(args: ToolArguments): CaptureLayout {
+        if (Object.keys(args).some(key => !['ref', 'selector', 'root', 'marks'].includes(key))) {
+            throw new Error(`${CAPTURE} accepts ref, selector, root and marks.`);
+        }
+        if (args.marks !== undefined && typeof args.marks !== 'boolean') {
+            throw new Error('marks must be a boolean.');
+        }
+        const target = args.ref === undefined && args.selector === undefined && args.root === undefined
+            ? null : resolve(parseTarget(args));
+        const view = documentWindow(document);
+        const viewport = { width: view.innerWidth, height: view.innerHeight };
+        const targetRect = target ? captureRect(target) : null;
+        if (target && !targetRect) {
+            throw new Error(`The element is outside the visible part of the page. Scroll the region that contains it with ${INTERACT}, then capture again.`);
+        }
+        const crop = targetRect?.rect ?? null;
+        const area = crop ?? { x: 0, y: 0, ...viewport };
+        const current = semantics();
+        const masks: Rect[] = [];
+        function walk(element: Element, region: DocumentScope) {
+            if (current.isMasked(element)) {
+                const visible = captureRect({ element, scope: region });
+                if (visible && intersects(visible.rect, area)) masks.push(visible.rect);
+                return;
+            }
+            for (const child of element.children) walk(child, region);
+            if (isHtmlTag(element, 'iframe')) {
+                const child = enterableFrame(element, region, current);
+                if (child) walk(child.document.documentElement, child);
+            }
+        }
+        walk(document.documentElement, mainDocumentScope());
+        const marks: CaptureLayout['marks'] = [];
+        let markPage: string | null = null;
+        let markTotal = 0;
+        if (args.marks === true) {
+            const pageRefs = refs();
+            if (pageRefs.length === 0) throw new Error(`Call ${SNAPSHOT} first: marks number the refs of your latest snapshot page.`);
+            requireScope(scope);
+            markTotal = pageRefs.length;
+            markPage = refParts(pageRefs[0]!).page;
+            for (const ref of pageRefs) {
+                const found = lookupRef(ref);
+                if ('problem' in found) continue;
+                const visible = captureRect({ element: found.element, scope });
+                if (!visible || !intersects(visible.rect, area) || contains(visible.rect, area)) continue;
+                marks.push({ label: refParts(ref).label, rect: visible.rect });
+            }
+        }
+        return { viewport, crop, cropClipped: targetRect?.clipped ?? false, masks, marks, markPage, markTotal };
     }
 
     function snapshot(args: ToolArguments) {
@@ -167,22 +231,34 @@ export function createObservation(options: ObservationOptions = {}) {
         };
     }
 
-    return { enterRun, refs, resolve, snapshot, clearCursor, createSemantics: semantics };
+    return { enterRun, refs, resolve, snapshot, captureLayout, clearCursor, createSemantics: semantics };
 }
 
 export type Observation = ReturnType<typeof createObservation>;
+
+function refParts(ref: string): { page: string; label: string } {
+    const colon = ref.indexOf(':');
+    return { page: ref.slice(0, colon), label: ref.slice(colon + 1) };
+}
+
+function captureRect({ element, scope }: ResolvedTarget): { rect: Rect; clipped: boolean } | null {
+    const mapped = toTopViewport(element.getBoundingClientRect(), scope);
+    if ('outside' in mapped) return null;
+    const { bounds, clipped } = mapped;
+    return { rect: { x: bounds.left, y: bounds.top, width: bounds.right - bounds.left, height: bounds.bottom - bounds.top }, clipped };
+}
+
+function enterableFrame(frame: HTMLIFrameElement, scope: DocumentScope, semantics: Semantics): DocumentScope | null {
+    if (semantics.readOmissionReason(frame)) return null;
+    return { document: frame.contentDocument!, frames: [...scope.frames, frame] };
+}
 
 function enterFrame(target: ResolvedTarget, semantics: Semantics): ResolvedTarget {
     const { element, scope } = target;
     if (isHtmlTag(element, 'iframe')) {
         semantics.requireFrameVisible(element);
-        const childDocument = element.contentDocument;
-        if (!semantics.readOmissionReason(element) && childDocument?.body) {
-            return {
-                element: childDocument.documentElement,
-                scope: { document: childDocument, frames: [...scope.frames, element] },
-            };
-        }
+        const child = enterableFrame(element, scope, semantics);
+        if (child) return { element: child.document.documentElement, scope: child };
     }
     return target;
 }

@@ -249,6 +249,7 @@ mod tests {
             .register(
                 "main",
                 ExtensionToolDefinition {
+                    returns_images: false,
                     extension_id: "example".into(),
                     name: "inspect".into(),
                     description: "Inspect application state".into(),
@@ -280,6 +281,7 @@ mod tests {
         let (bridge, tool_id, mut first_page) = registered_bridge();
         let (sender, mut second_page) = mpsc::unbounded_channel();
         let definition = || ExtensionToolDefinition {
+            returns_images: false,
             extension_id: "example".into(),
             name: "inspect".into(),
             description: "Inspect application state".into(),
@@ -313,18 +315,21 @@ mod tests {
                 async move { bridge.call(call, receiver).await }
             });
             let event = events.recv().await.unwrap();
-            let reply = ExtensionToolReply::Value { value: json!(page) };
+            let reply = ExtensionToolReply::Value {
+                value: json!(page),
+                images: vec![],
+            };
             assert!(bridge.resolve(page, event["requestId"].as_str().unwrap(), reply));
             task.await.unwrap().unwrap()
         }
         assert!(matches!(
             answered_by(&bridge, &tool_id, "second", &mut second_page).await,
-            ExtensionToolReply::Value { value } if value == "second"
+            ExtensionToolReply::Value { value, .. } if value == "second"
         ));
         bridge.clear_page("second");
         assert!(matches!(
             answered_by(&bridge, &tool_id, "main", &mut first_page).await,
-            ExtensionToolReply::Value { value } if value == "main"
+            ExtensionToolReply::Value { value, .. } if value == "main"
         ));
         assert!(
             second_page.try_recv().is_err(),
@@ -345,7 +350,10 @@ mod tests {
         });
         let event = events.recv().await.unwrap();
         let request_id = event["requestId"].as_str().unwrap();
-        let reply = ExtensionToolReply::Value { value: Value::Null };
+        let reply = ExtensionToolReply::Value {
+            value: Value::Null,
+            images: vec![],
+        };
         assert!(!bridge.resolve("other", request_id, reply.clone()));
         assert!(bridge.resolve("main", request_id, reply.clone()));
         task.await
@@ -367,7 +375,10 @@ mod tests {
         assert!(!bridge.resolve(
             "main",
             event["requestId"].as_str().unwrap(),
-            ExtensionToolReply::Value { value: Value::Null }
+            ExtensionToolReply::Value {
+                value: Value::Null,
+                images: vec![]
+            }
         ));
     }
 }

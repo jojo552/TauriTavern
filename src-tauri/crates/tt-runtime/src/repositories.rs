@@ -200,6 +200,11 @@ pub(crate) async fn build(
     ));
     let skill_repository: Arc<dyn SkillRepository> = Arc::new(FileSkillRepository::new(
         data_root.join("_tauritavern").join("skills"),
+        tt_adapter_storage_core::builtin_skills::materialize_builtin_skills(
+            dependencies.bundled_resources.clone(),
+            &data_root,
+        )
+        .await?,
     ));
     let sprite_repository: Arc<dyn SpriteRepository> = Arc::new(FileSpriteRepository::new(
         data_directory.characters().to_path_buf(),

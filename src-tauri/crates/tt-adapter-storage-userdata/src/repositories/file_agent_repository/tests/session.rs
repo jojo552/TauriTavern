@@ -4,7 +4,9 @@ use super::*;
 use serde_json::json;
 use tt_domain::models::agent::AgentModelMessage;
 use tt_domain::models::agent::session::AgentSession;
-use tt_domain::models::agent::session::AgentSessionMessage;
+use tt_domain::models::agent::session::{
+    AgentSessionCompaction, AgentSessionMessage, AgentSessionMessageOrigin, NewAgentSessionMessage,
+};
 use tt_ports::repositories::agent_session_repository::{
     AgentSessionMessageReadQuery, AgentSessionRepository,
 };
@@ -12,6 +14,15 @@ use tt_ports::workspace_fs::WorkspaceFs;
 
 fn path(value: &str) -> WorkspacePath {
     WorkspacePath::parse(value).unwrap()
+}
+
+fn new_message(run_id: &str, message: AgentModelMessage) -> NewAgentSessionMessage {
+    NewAgentSessionMessage {
+        run_id: run_id.into(),
+        message,
+        origin: None,
+        compaction: None,
+    }
 }
 
 async fn create_session(repository: &FileAgentRepository, id: &str) {
@@ -191,12 +202,21 @@ async fn session_history_pages_and_appends_across_reopen() {
     let second_message = message("second");
     let third_message = message("third");
     repository
-        .append_session_message("session_a", "opaque_run", &first_message, None)
+        .append_session_message(
+            "session_a",
+            new_message("opaque_run", first_message.clone()),
+        )
         .await
         .unwrap();
     let (left, right) = tokio::join!(
-        repository.append_session_message("session_a", "opaque_run", &second_message, None),
-        repository.append_session_message("session_a", "opaque_run", &third_message, None),
+        repository.append_session_message(
+            "session_a",
+            new_message("opaque_run", second_message.clone())
+        ),
+        repository.append_session_message(
+            "session_a",
+            new_message("opaque_run", third_message.clone())
+        ),
     );
     let left = left.unwrap();
     let right = right.unwrap();
@@ -235,7 +255,10 @@ async fn session_history_pages_and_appends_across_reopen() {
     assert_eq!(earlier[0].message, first_message);
     assert_eq!(
         reopened
-            .append_session_message("session_a", "opaque_run", &first_message, None)
+            .append_session_message(
+                "session_a",
+                new_message("opaque_run", first_message.clone())
+            )
             .await
             .unwrap()
             .seq,
@@ -250,7 +273,10 @@ async fn session_history_pages_and_appends_across_reopen() {
     assert!(reopened.session_last_seq("session_a").await.is_err());
     assert!(
         reopened
-            .append_session_message("session_a", "opaque_run", &first_message, None)
+            .append_session_message(
+                "session_a",
+                new_message("opaque_run", first_message.clone())
+            )
             .await
             .is_err()
     );
@@ -293,12 +319,38 @@ async fn session_metadata_and_deletion_preserve_other_sessions_and_shared_profil
 
     session_run(&repository, "session_a", "run_a").await;
     let (other_run, _) = session_run(&repository, "session_b", "run_b").await;
+    repository
+        .append_session_message(
+            "session_a",
+            NewAgentSessionMessage {
+                run_id: "run_a".into(),
+                message: serde_json::from_value(json!({
+                    "role": "user", "parts": [{"type": "text", "text": "Earlier work summary"}]
+                }))
+                .unwrap(),
+                origin: Some(AgentSessionMessageOrigin {
+                    invocation_id: "root".into(),
+                    round: 1,
+                }),
+                compaction: Some(AgentSessionCompaction {
+                    kept_from_seq: None,
+                    tokens_before: 7000,
+                    tokens_after: 1000,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let reopened = FileAgentRepository::new(root.clone());
+    let untouched = reopened.load_session("session_a").await.unwrap();
+    assert!(untouched.title.is_none());
+    assert!(untouched.last_used_at.is_none());
     let user: AgentModelMessage = serde_json::from_value(json!({
         "role": "user", "parts": [{"type": "text", "text": "  检查\n  扩展的问题  "}]
     }))
     .unwrap();
     let first = repository
-        .append_session_message("session_a", "run_a", &user, None)
+        .append_session_message("session_a", new_message("run_a", user.clone()))
         .await
         .unwrap();
     let sessions = repository.list_sessions().await.unwrap();
@@ -311,7 +363,7 @@ async fn session_metadata_and_deletion_preserve_other_sessions_and_shared_profil
         .unwrap();
     assert_eq!(renamed.last_used_at, sessions[0].last_used_at);
     repository
-        .append_session_message("session_a", "run_a", &user, None)
+        .append_session_message("session_a", new_message("run_a", user.clone()))
         .await
         .unwrap();
     let used_at = repository
@@ -324,7 +376,7 @@ async fn session_metadata_and_deletion_preserve_other_sessions_and_shared_profil
     }))
     .unwrap();
     repository
-        .append_session_message("session_a", "run_a", &assistant, None)
+        .append_session_message("session_a", new_message("run_a", assistant.clone()))
         .await
         .unwrap();
     let reopened = FileAgentRepository::new(root.clone());
@@ -381,6 +433,7 @@ async fn full_session_history_for_prompt_assembly_is_not_capped_at_ui_page_size(
                 created_at: Utc::now(),
                 message: message.clone(),
                 origin: None,
+                compaction: None,
             })
             .unwrap(),
         );

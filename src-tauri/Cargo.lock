@@ -589,7 +589,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "sha1 0.11.0",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror 2.0.20",
  "tokio",
  "unit-prefix",
@@ -1460,7 +1460,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.3",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -7023,9 +7023,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.5.0"
+version = "3.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fae7019994ae0fe4ada40b732f798f3ff26f0f04facb1477f1bf37eb4f18a2d3"
+checksum = "ab5023804cbe0304cbe06197ac16e645a0a0d0ffa2953bf735c15c2fa0213350"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -7541,9 +7541,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
  "itoa",
  "memchr",
@@ -7735,9 +7735,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -8668,12 +8668,13 @@ dependencies = [
 
 [[package]]
 name = "tauritavern"
-version = "2.3.0"
+version = "2.4.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
  "block2",
  "bytes",
+ "cairo-rs",
  "chrono",
  "dispatch2",
  "dunce",
@@ -8731,6 +8732,9 @@ dependencies = [
  "ttsync-core",
  "url",
  "uuid",
+ "webkit2gtk",
+ "webview2-com",
+ "windows 0.62.2",
  "zip",
 ]
 
@@ -9421,10 +9425,11 @@ dependencies = [
  "futures-util",
  "jsonwebtoken",
  "percent-encoding",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tokio",
  "tokio-tungstenite",
  "tracing",
@@ -9451,7 +9456,7 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "sys-locale",
  "tokio",
  "tracing",
@@ -9476,7 +9481,7 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tokio",
  "tracing",
  "tt-adapter-storage-core",
@@ -9560,7 +9565,7 @@ dependencies = [
  "hf-hub",
  "redb",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tokenizers",
  "tokio",
  "tt-domain",
@@ -9596,7 +9601,7 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -9630,7 +9635,7 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror 2.0.20",
  "ttsync-contract",
  "url",
@@ -9645,7 +9650,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tokio",
  "tokio-util",
  "tt-contracts",
@@ -9679,7 +9684,7 @@ dependencies = [
 
 [[package]]
 name = "tt-server"
-version = "2.3.0"
+version = "2.4.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -9693,7 +9698,7 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -10391,18 +10396,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

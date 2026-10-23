@@ -332,6 +332,12 @@ impl SessionResources {
                     mime_type,
                 }))?
             }
+            "read_agent_workspace_bytes" => ResourceReply::Bytes(
+                services
+                    .agent_runtime_service
+                    .read_workspace_bytes(a.get("dto")?)
+                    .await?,
+            ),
             "get_world_info" => {
                 let dto: GetWorldInfoDto = a.get("dto")?;
                 ResourceReply::Bytes(

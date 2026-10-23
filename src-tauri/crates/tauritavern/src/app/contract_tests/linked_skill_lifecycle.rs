@@ -31,7 +31,10 @@ async fn install_linked_skill(service: &SkillService, scope: SkillScope, kind: &
 async fn character_rename_and_delete_follow_stored_skill_identity() {
     let root = temp_root("character-linked-skill-lifecycle");
     let service = character_service(&root).await;
-    let skills = SkillService::new(Arc::new(FileSkillRepository::new(root.join("skills"))));
+    let skills = SkillService::new(Arc::new(FileSkillRepository::new(
+        root.join("skills"),
+        root.join("builtin-skills"),
+    )));
     for name in ["Source", "Taken"] {
         service
             .create_character(create_character(name, None))
@@ -101,7 +104,10 @@ async fn preset_delete_cleans_canonical_api_link_and_retains_other_sources() {
     let root = temp_root("preset-linked-skill-lifecycle");
     let repository = Arc::new(TestPresetRepository::default());
     let service = PresetService::new(repository.clone());
-    let skills = SkillService::new(Arc::new(FileSkillRepository::new(root.join("skills"))));
+    let skills = SkillService::new(Arc::new(FileSkillRepository::new(
+        root.join("skills"),
+        root.join("builtin-skills"),
+    )));
     for name in ["Linked", "Other"] {
         service
             .save_preset_data(name.into(), "koboldhorde", json!({}))
@@ -148,7 +154,10 @@ async fn linked_skill_failure_preserves_character_success_but_fails_preset_delet
         .await
         .unwrap();
     let skill_root = root.join("skills");
-    let skills = SkillService::new(Arc::new(FileSkillRepository::new(skill_root.clone())));
+    let skills = SkillService::new(Arc::new(FileSkillRepository::new(
+        skill_root.clone(),
+        root.join("builtin-skills"),
+    )));
     fs::create_dir_all(skill_root.join("index")).await.unwrap();
     fs::write(skill_root.join("index/skills.json"), b"not json")
         .await
