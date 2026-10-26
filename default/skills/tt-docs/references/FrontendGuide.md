@@ -29,7 +29,7 @@
    - 安装 Tauri mobile 兼容层（runtime polyfills，仅移动端）
    - 为宿主接管的路由响应注入追踪 header：`x-tauritavern-trace-id`
    - 安装后端错误桥并通过共同 `invoke('wait_for_backend_ready')` 等待宿主就绪；HTTP 的首次 listen/invoke 自身先等待同一 session/SSE ready，不再维护第二层初始化探测
-   - 原生宿主就绪后安装窗口背景发布与移动端窗口快照；HTTP 浏览器仍安装基于 DOM 视口的 `api.layout`
+   - 原生宿主就绪后安装窗口背景发布，以及移动端窗口快照与抽屉栏发布；HTTP 浏览器仍安装基于 DOM 视口的 `api.layout`
 
 ### 2.1 宿主身份
 
@@ -213,6 +213,34 @@ src/
 - Prompt 组装和生成判断使用本次生效设置，`createGenerationParameters()` 出口统一省略字段；用户显式配置的 Additional Parameters 仍拥有最终覆盖权。
 - JSON 视图只编辑当前格式可用的参数，非法输入整体不应用；它不是最终请求预览，后续仍遵循渠道与模型的转换规则。
 
+## 6.5 CodeMirror 编辑器
+
+挂载与生命周期在 `src/scripts/tauri/codemirror-editor.js`，编辑器本体在按需加载的 `src/lib-bundle-editor.js`。设置关闭时保留原生 textarea。
+
+- 源 textarea 是唯一的值来源。编辑器通过 `onChange` 通知有改动，调用方需要文本时用 `flush()` 写回源 textarea；`flush({ input: true })` 会在源上派发 `input`，沿用 textarea 原有的处理链。
+- 外壳 `.tt-codemirror-editor` 接管源 textarea 的盒子，并继承其 `resize`。读取尺寸时不排版源文本，除非源的高度由内容决定（`field-sizing: content`）。挂载先等调用方当前的同步工作结束（例如抽屉显示出源 textarea），编辑器包加载后在下一帧之前完成，源 textarea 不会先单独渲染；编辑器在页面外建好，再一次性放入页面。全屏结束后恢复用户调整过的高度。
+- 编辑器 DOM 的位置随引擎而定，判断集中在 `codemirror-editor.js`。Chromium 宿主（Windows、Android、OpenHarmony）把它放在外壳的 open shadow root 中：Blink 每次 DOM 变化都会重查编辑器外围的 `:has()` 锚点，隔离后页面选择器既不匹配它，也不会因它重算样式。WebKit 宿主（macOS、iOS、Linux）把它留在页面中：在 WebKit 的 shadow root 里，替换一段延伸到最后一行的选区的编辑，会把页面内容拉进编辑器。页面 CSS 和脚本不依赖编辑器内部 DOM 是否可见。
+- 页面中的编辑器样式由 style-mod 写进 `<head>` 的一个 `<style>`。它原本每次挂载都重写这段文本，让整页重算样式；`patches/style-mod@4.1.3.patch` 在文本不变时跳过重写，升级 style-mod 时确认上游是否已经修好。
+- 原始 `input`/`beforeinput` 停在外壳；键盘与焦点事件照常冒泡，判断焦点时需要看进 shadow root（见 `isInputElementInFocus()`）。
+- 页面通过两处与编辑器样式交互：主题自定义属性自然继承，`--tt-editor-tools: none` 隐藏工具栏（查找替换仍可打开）；查找面板打开时外壳带 `data-search-open`。
+- 使用原生光标和选区，每次按键只产生一帧。
+
+## 6.6 样式与合成成本
+
+- Blink 的所有 `:has()` 规则共用一个失效集，锚点包住的界面越大，DOM 变化时重查的代价越大。所以：
+  - `:has()` 写在规则主体上，不挂在 `body`、`#top-settings-holder` 这类大容器上；
+  - 参数里不检查 `style` 属性，需要按显示状态选择时，由改变状态的代码写类或属性；
+  - `:has()` 之后的最右复合带类、ID 或属性；
+  - 不要为了绕开 `:has()` 改用已知类名的白名单，扩展插入的控件会漏掉。
+- 兄弟组合子不要以 `*` 或纯伪类结尾、左侧又没有特征（如 `* + *`），否则 `body` 的子元素一有增删，整个 `body` 都要重算。`> * + *` 写成 `> :not(:first-child)`。
+- WebKit 中，`:has()` 后面接兄弟组合子、参数又检查状态伪类时（如 `#a:has(#b:checked) ~ #c`），页面上任何该状态的变化都会引起整页重查。改写成后代关系：`#共同父元素:has(#b:checked) #c`。
+- 成批出现的控件不要成为滚动容器，每个可见的滚动容器都会增加每一帧的合成成本。世界书标题因此按内容自适应高度，设为 `overflow: hidden`。
+- WebKit 有两种情况会重算整个文档的样式：内存占用较高时（macOS 上约 1.5 GB 以上）每 30 s 一次，以及每次打开、关闭模态 `<dialog>`。成本随渲染树里的元素数增长；原生下拉框还要重新测量选项文字，含 U+FE0F（emoji 表现选择符）的文字尤其慢。所以成批出现的下拉框，选项文字不带 U+FE0F；长列表里远离可见区域的行，不留在渲染树里。
+- 长列表的条目用 `content-visibility: auto`，并按实际高度给出 `contain-intrinsic-block-size`。WebKit 的 `content-visibility` 不省样式计算，所以世界书还会让远离可见区域的条目休眠：由 `IntersectionObserver` 判断远近，休眠条目设为 `content-visibility: hidden`，标题栏 `display: none`。休眠要守住两点：
+  - 不改变条目尺寸。`hidden` 让条目保持上次渲染的高度；否则条目会在唤醒前塌缩，快速滚动停下后列表会反复伸缩、闪烁。
+  - 不让内容变得无法测量。只隐藏标题栏，其余部分仍能读取布局，休眠时打开的条目也能正确挂载编辑器。依赖布局的初始化（如测量标题）放到唤醒时做；持有焦点的条目不休眠。
+- WebKit 每次按下鼠标、或删除持有选区的节点时，会在页面里搜索放置选区的位置，在由表单组成的长列表里要好几秒。世界书列表因此对字段以外的按下调用 `preventDefault()`，同时让当前焦点 `blur()`（`change` 时保存的字段靠失焦提交）；拆除列表前先清除其中的选区。不要用 `user-select: none` 代替，WKWebView 仍会搜索。
+
 ## 7. 插件系统前端适配
 
 ### 7.1 设计目标
@@ -227,6 +255,7 @@ src/
 - `src/scripts/browser-fixes.js`：上游浏览器补丁（保持与 SillyTavern 同步）。
 - `src/tauri/main/compat/mobile/mobile-runtime-compat.js`：Tauri mobile 运行时 polyfills（补齐旧 WebView 缺失 JS API）。
 - `src/scripts/util/window-layout.js`：移动端原生窗口快照；`src/scripts/window-backdrop.js`：第一方背景唯一写入与条带发布入口。
+- `src/scripts/drawer-bar.js`：iOS 宿主在系统 bar 区域绘制抽屉按钮时，发布顶层抽屉并转发原生点按。
 - `src/scripts/extensions/runtime/resource-paths.js`：扩展资源路径规范化与 third-party 判定。
 - `src/scripts/extensions/runtime/third-party-runtime.js`：第三方扩展样式兼容层（legacy WebView 下为样式 URL 附加 `ttCompat=layer`，触发 Rust 端点做 `@layer` 展平；不再走前端预取/Blob 注入）。
 - `src/scripts/extensions/runtime/asset-loader.js`：脚本与样式注入、超时保护、重复注入幂等控制。
@@ -319,7 +348,7 @@ TauriTavern 自有的状态型 UI 作为 SillyTavern first-party extension 挂�
 
 #### 7.7.3 原生内容视口与窗口背景
 
-原生宿主拥有主 WebView 的矩形，系统栏、刘海和停靠键盘在原生层消费一次，网页按普通视口排版。前端只做两件事：`util/window-layout.js` 接收窗口快照并设置 `#bg1` 的窗口矩形；`window-backdrop.js` 的 `applyWindowBackdrop()` 是第一方背景的唯一写入点，新增背景来源接入它。只有高度变化的 resize 不触发与宽度相关的工作。
+原生宿主拥有主 WebView 的矩形，系统栏、刘海和停靠键盘在原生层消费一次，网页按普通视口排版。前端只做三件事：`util/window-layout.js` 接收窗口快照并设置 `#bg1` 的窗口矩形；`window-backdrop.js` 的 `applyWindowBackdrop()` 是第一方背景的唯一写入点，新增背景来源接入它；快照宣告 `drawerBar` 时，`drawer-bar.js` 把顶层抽屉发布给原生抽屉栏，页面隐藏自己的顶栏。只有高度变化的 resize 不触发与宽度相关的工作。
 
 浏览器宿主不安装原生窗口快照或背景发布，但仍提供 `api.layout.snapshot()/subscribe()`：读取 `visualViewport`，缺少时使用 `innerWidth/innerHeight`，按浏览器实际内容视口布局。这与原生窗口能力是否存在是两回事。
 
@@ -414,6 +443,15 @@ TauriTavern 自有的状态型 UI 作为 SillyTavern first-party extension 挂�
   - `window.__TAURITAVERN_PERF__.exportJson({ includeResources: true })` 直接拿到 JSON 字符串
   - `await window.__TAURITAVERN_PERF__.copyReport()` 通过原生写入器复制到剪贴板
 - HUD 操作：拖动标题栏移动（位置持久化），点击标题栏展开/收起；桌面端可用 `Ctrl+Alt+P` 切换开关。
+
+### 10.2 性能基线
+
+`tests/perf/` 守住前端优化不退化。`pnpm run test:perf`（已接入 `pnpm run check`）在 Playwright 固定版本的 Chromium headless shell 里，经 Web Host 运行构建后的前端：80 条消息的聊天、200 条世界书，第一条 10 万字，宿主身份为 Windows 桌面。每个场景步骤统计引擎做了多少工作，与提交的 `tests/perf/baseline.json` 比较。首次运行前安装浏览器：`pnpm exec playwright-core install --only-shell chromium`。
+
+- 计的是工作量，不是耗时，所以与机器快慢无关：事件派发；样式重算次数、其中强制的次数与重算的元素数；布局次数、强制次数与布局的对象数；有样式或布局工作的帧数与合成更新；以及步骤结束后的页面规模：请求数、元素数、可见滚动容器数、回收后仍存活的节点、布局对象与事件监听器。
+- 任一计数偏离基线超过 10%（至少 2）即失败，变少也算。有意的改变用 `pnpm run test:perf -- --update` 重新记录，基线变化随提交评审；升级 `playwright-core` 换了 Chromium 后也要重新记录。
+- 计数与机器快慢无关，靠的是测量环境的约定：动画与平滑滚动关闭；短于一帧的定时器只在下一帧之前执行，一串 jQuery Deferred 回调因此落在同一帧；步骤进行中，1 秒以内的较长定时器和网络响应都先扣住，等页面静默（主线程连续三个帧间隔没有工作）后再执行或逐个放行，页面看似静默之后就不会再有迟到的工作；页面不带 query 打开。按这些约定，CPU 限速到 6 倍时计数仍在余量之内。页面报错、控制台错误或请求失败时直接失败，避免比较坏掉的页面。
+- 新增场景：在 `tests/perf/` 放 `*.perf.mjs`，默认导出 `async (app) => {}`，用 `app.measure(name, ...inputs)` 计量一组输入。每个输入之后页面都会静默下来，再进行下一个，所以输入的划分决定哪些工作可以合并：回复的每个 token 是一个输入（经 `__perfReply.push()` 与 `end()` 送入）；连续打字放在同一个输入里，用帧隔开，防抖工作只在最后执行一次。点击坐标用 `app.centerOf(locator)` 在步骤之前取得，步骤里用 `page.mouse` 与 `page.keyboard` 发送真实输入，避免驱动自身的事件计入。新场景应在 CPU 限速（`Emulation.setCPUThrottlingRate`）下核对计数仍在余量之内。
 
 ## 11. 工程守护（Guardrails + 类型检查）
 

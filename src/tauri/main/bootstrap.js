@@ -1,5 +1,6 @@
 import { installWindowLayout } from '../../scripts/util/window-layout.js';
 import { installWindowBackdrop } from '../../scripts/window-backdrop.js';
+import { installDrawerBar } from '../../scripts/drawer-bar.js';
 import { invoke, isWebHost } from '../../tauri-bridge.js';
 import { eventSource, event_types } from '../../scripts/events.js';
 import { createTauriMainContext } from './context.js';
@@ -377,6 +378,7 @@ export function bootstrapTauriMain() {
     runAfterTauriReady(() => setFrontendLogBackendForwardingEnabled(true));
     if (!isWebHost()) runAfterTauriReady(() => {
         installWindowBackdrop(context);
+        installDrawerBar(context);
         void installWindowLayout(context).catch(error => console.error('[TauriTavern] Window layout:', error));
     });
 
