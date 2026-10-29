@@ -47,7 +47,7 @@
             "jsAllocatedBytes": 58721284
         },
         "chat/send-and-stream": {
-            "eventDispatches": 77,
+            "eventDispatches": 81,
             "styleRecalcs": 28,
             "forcedStyleRecalcs": 2,
             "elementsRestyled": 294,
@@ -57,13 +57,13 @@
             "frames": 23,
             "compositorUpdates": 13,
             "requests": 1,
-            "hostBytes": 199927,
+            "hostBytes": 208073,
             "elements": 13933,
             "scrollContainers": 84,
             "liveNodes": 44147,
             "layoutObjects": 3942,
             "eventListeners": 3370,
-            "jsAllocatedBytes": 18913796
+            "jsAllocatedBytes": 28718890
         },
         "world-info/open-list": {
             "eventDispatches": 152,
