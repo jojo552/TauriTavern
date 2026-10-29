@@ -9,7 +9,7 @@
             "eventListeners": 3334
         },
         "character/open-heavy-card": {
-            "eventDispatches": 98,
+            "eventDispatches": 109,
             "styleRecalcs": 22,
             "forcedStyleRecalcs": 11,
             "elementsRestyled": 444,
@@ -28,7 +28,7 @@
             "jsAllocatedBytes": 11005856
         },
         "character/open-back": {
-            "eventDispatches": 647,
+            "eventDispatches": 717,
             "styleRecalcs": 22,
             "forcedStyleRecalcs": 11,
             "elementsRestyled": 1234,

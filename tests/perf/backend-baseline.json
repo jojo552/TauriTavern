@@ -3,10 +3,10 @@
     "steps": {
         "app/startup": {
             "readBytes": 7167329,
-            "readOps": 4916,
-            "resultBytes": 663411,
+            "readOps": 4363,
+            "resultBytes": 507754,
             "writeBytes": 83688,
-            "writeOps": 5065,
+            "writeOps": 4312,
             "instructions": 1358107956
         },
         "character/open-back": {
