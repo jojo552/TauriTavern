@@ -34,7 +34,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libdbus-1-dev libwebkit2gtk-4.1-dev librsvg2-dev pkg-config
+            libdbus-1-dev libwebkit2gtk-4.1-dev librsvg2-dev pkg-config valgrind
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -52,18 +52,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # `pnpm run check` includes `test:perf`, which compares against a baseline recorded on this pinned shell.
+      # `pnpm run check` includes `test:perf`, which compares against a baseline recorded on this pinned shell,
+      # and `test:perf:backend`, which counts instructions under valgrind (installed above).
       - name: Install the performance baseline browser
         run: pnpm exec playwright-core install --with-deps --only-shell chromium
 
-      - name: Check Rust formatting without modifying the checkout
-        id: rustfmt
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-
-      # Collect other failures even when formatting needs work; the failed step
-      # still fails this job, so the release gate below remains closed.
+      # Includes `check:rust:fmt`, so formatting is checked without modifying the checkout.
       - name: Run checks and tests
-        if: ${{ !cancelled() && (success() || steps.rustfmt.outcome == 'failure') }}
         run: pnpm run check
 
   build:

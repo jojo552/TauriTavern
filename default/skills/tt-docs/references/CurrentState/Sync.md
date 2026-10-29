@@ -72,5 +72,5 @@ LAN 功能受宿主 `sync.lan` 能力门禁和平台权限约束。移动端权�
 | 作业契约 | [共享 DTO 与事件](../../src-tauri/crates/tt-contracts/src/sync.rs) |
 | 网络、存储与数据范围 | [共享同步实现](../../src-tauri/crates/tt-adapter-sync/src/sync/)、[TT-Sync 适配](../../src-tauri/crates/tt-adapter-sync/src/tt_sync/) |
 | 发现协议与运行参数 | [LAN 发现](../../src-tauri/crates/tt-adapter-sync/src/sync/lan/peer_discovery.rs) |
-| Tauri 集成 | [服务装配](../../src-tauri/crates/tauritavern/src/app/composition/services/sync.rs)、[事件与批准适配](../../src-tauri/crates/tauritavern/src/app/composition/adapters/tauri_sync.rs) |
+| Tauri 集成 | [服务装配](../../src-tauri/crates/tauritavern/src/app/composition/services/sync.rs)、[事件与批准适配](../../src-tauri/crates/tauritavern/src/infrastructure/sync_host.rs) |
 | 前端交互 | [面板与 Controller](../../src/scripts/tauri/setting/sync-app/)、[宿主适配](../../src/scripts/tauri/setting/setting-panel/sync-popup.js) |

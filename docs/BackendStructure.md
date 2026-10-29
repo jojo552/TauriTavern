@@ -199,7 +199,8 @@ src-tauri/crates/tauritavern/src/
 │   └── startup_profile.rs # 启动期 settings / policy snapshot
 ├── presentation/          # Tauri commands、CommandError、web resource adapter
 ├── infrastructure/        # Tauri-bound infrastructure
-└── platform/              # 宿主身份、iOS/UIKit、macOS/WebView、native UI glue
+├── platform/              # 宿主身份、iOS/UIKit、macOS/WebView、native UI glue
+└── perf.rs, perf/         # 后端性能重放（`perf` feature，见 CurrentState/PerfBaseline.md）
 ```
 
 共享装配在 [tt-runtime/lib.rs](../src-tauri/crates/tt-runtime/src/lib.rs)（配置/宿主依赖/服务包入口）、[repositories.rs](../src-tauri/crates/tt-runtime/src/repositories.rs)、[services.rs](../src-tauri/crates/tt-runtime/src/services.rs) 与 [agent.rs](../src-tauri/crates/tt-runtime/src/agent.rs)。浏览器入口在 [tt-server/main.rs](../src-tauri/crates/tt-server/src/main.rs)；[host.rs](../src-tauri/crates/tt-server/src/host.rs)、[commands.rs](../src-tauri/crates/tt-server/src/commands.rs) 及其子模块、[events.rs](../src-tauri/crates/tt-server/src/events.rs)、[resources.rs](../src-tauri/crates/tt-server/src/resources.rs) 与文件交付模块只承担浏览器宿主边界。
@@ -231,6 +232,7 @@ Tauri 的 `app/composition/services` 调它后，把 `CoreServices` 与 sync/arc
 - adapter 不调用 application service。
 - 同一共享服务只在 `tt-runtime` 装配；宿主 composition 只注入真实差异并补充宿主服务，不复制业务图。
 - `CoreServices`、`AppState` / `AppServices` 与 server `Host` 都不作为全局 service locator 下沉到 application 或 adapter；任务生命周期由各宿主持有。
+- Tauri composition 不接触 `AppHandle`。宿主提供的东西由 `app/host/environment.rs` 汇集成 `HostEnvironment` 传入；后端性能重放用同一套 composition，换上自己的 `HostEnvironment`。
 
 ### 6.3 Host-bound infrastructure
 
@@ -307,7 +309,7 @@ adapter 是外层细节，但不是可以任意堆放的 common bucket。一个 
 | LLM/SearXNG/SD/Translate/TTS/provider metadata/embedding HTTP | `tt-adapter-provider-http` | 复用 `tt-adapter-http` |
 | Vector 索引与本地 embedding runtime | `tt-adapter-vector` | 独立持久化/推理依赖，不下沉到 storage-core |
 | HTTP pool/profile/helper、更新查询、外部导入下载 IO | `tt-adapter-http` | 不放 provider 用例或宿主 UI glue |
-| LAN/TT Sync runtime | `tt-adapter-sync` | Tauri event/UI adapter 留 host composition |
+| LAN/TT Sync runtime | `tt-adapter-sync` | Tauri event/UI adapter 在 host `infrastructure/sync_host.rs`，经 `HostEnvironment` 交给 composition |
 | Data Archive executor / staging gateway | `tt-adapter-archive` | 两个宿主复用；picker/share 或 browser upload/download 留各自宿主 |
 | 工作区 Shell、jq、Python 与 JavaScript 执行 | `tt-adapter-workspace-shell` | 依赖 `WorkspaceShell` / `WorkspaceFs` port，复用调用方的文件范围；不接触物理路径 |
 
@@ -389,6 +391,7 @@ pnpm run check:rust-boundaries
 
 ```bash
 pnpm run test:rust
+pnpm run test:perf:backend
 pnpm run check:rust:dev
 cargo test --manifest-path src-tauri/Cargo.toml -p <affected-crate> <focused-test>
 ```

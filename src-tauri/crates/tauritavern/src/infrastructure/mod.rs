@@ -19,6 +19,7 @@ pub mod paths;
 #[cfg(desktop)]
 pub mod runtime_paths_config_store;
 pub mod staging;
+pub mod sync_host;
 #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub mod webkitgtk_capture;
 #[cfg(target_os = "windows")]

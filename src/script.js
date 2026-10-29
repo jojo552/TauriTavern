@@ -1475,7 +1475,13 @@ export function resultCheckStatus() {
     stopStatusLoading();
 }
 
-async function getPersistedCharacterChats(avatar) {
+/**
+ * Lists a character's persisted chats. A simple listing carries file names only and reads no chat content.
+ * @param {string} avatar Avatar file name
+ * @param {{ simple: boolean }} options
+ * @returns {Promise<any[]>}
+ */
+async function listPersistedCharacterChats(avatar, { simple }) {
     const character = characters.find(character => character.avatar === avatar);
     if (!character) {
         return [];
@@ -1484,7 +1490,7 @@ async function getPersistedCharacterChats(avatar) {
     const response = await fetch('/api/characters/chats', {
         method: 'POST',
         headers: getRequestHeaders(),
-        body: JSON.stringify({ avatar_url: character.avatar, ch_name: character.name }),
+        body: JSON.stringify({ avatar_url: character.avatar, ch_name: character.name, simple }),
     });
 
     if (!response.ok) {
@@ -1496,7 +1502,11 @@ async function getPersistedCharacterChats(avatar) {
         throw new Error('Character chat list could not be loaded');
     }
 
-    const chats = Array.isArray(data) ? data : Object.values(data ?? {});
+    return Array.isArray(data) ? data : Object.values(data ?? {});
+}
+
+async function getPersistedCharacterChats(avatar) {
+    const chats = await listPersistedCharacterChats(avatar, { simple: false });
     chats.sort((a, b) => sortMoments(timestampToMoment(a.last_mes), timestampToMoment(b.last_mes)));
     return chats;
 }
@@ -1504,15 +1514,17 @@ async function getPersistedCharacterChats(avatar) {
 /**
  * Resolves the chat a character opens: its current chat while it still exists, otherwise its most recent one.
  * A character without persisted chats keeps its current chat name so a new chat can be created under it.
- * @param {{ file_name: string }[]} persistedChats Persisted chats, most recent first
+ * @param {string} avatar Avatar file name
+ * @param {{ file_name: string }[]} chatFiles Persisted chat files in any order
  * @param {string} currentChat Chat name stored in the character
- * @returns {string} Chat name to open
+ * @returns {Promise<string>} Chat name to open
  */
-function resolvePersistedChat(persistedChats, currentChat) {
-    if (persistedChats.length === 0 || persistedChats.some(chat => normalizeChatFileName(chat.file_name) === currentChat)) {
+async function resolvePersistedChat(avatar, chatFiles, currentChat) {
+    if (chatFiles.length === 0 || chatFiles.some(chat => normalizeChatFileName(chat.file_name) === currentChat)) {
         return currentChat;
     }
-    return normalizeChatFileName(persistedChats[0].file_name);
+    const [latest] = await getPersistedCharacterChats(avatar);
+    return normalizeChatFileName(latest.file_name);
 }
 
 /**
@@ -1543,8 +1555,8 @@ export async function selectCharacterById(id, { switchMenu = true, chatFile } = 
 
     if (selected_group || String(this_chid) !== String(id) || chatFile !== undefined) {
         if (!is_send_press) {
-            const persistedChats = chatFile === undefined ? await getPersistedCharacterChats(avatar) : [];
-            const allowNewChat = chatFile === undefined && persistedChats.length === 0;
+            const chatFiles = chatFile === undefined ? await listPersistedCharacterChats(avatar, { simple: true }) : [];
+            const allowNewChat = chatFile === undefined && chatFiles.length === 0;
             setCharacterId(undefined);
             setCharacterName('');
             resetSelectedGroup();
@@ -1560,12 +1572,17 @@ export async function selectCharacterById(id, { switchMenu = true, chatFile } = 
                 return;
             }
 
+            // After each await, this switch goes on only while the group, the character and the chat it last saw are unchanged.
+            const superseded = seenChat => selected_group || String(this_chid) !== String(id) || characters[id]?.chat !== seenChat;
             const previousChat = characters[id].chat;
-            const targetChat = chatFile ?? resolvePersistedChat(persistedChats, previousChat);
+            const targetChat = chatFile ?? await resolvePersistedChat(avatar, chatFiles, previousChat);
+            if (superseded(previousChat)) {
+                return;
+            }
             characters[id].chat = targetChat;
             await getChat({ allowNewChat });
 
-            if (selected_group || String(this_chid) !== String(id) || characters[id]?.chat !== targetChat) {
+            if (superseded(targetChat)) {
                 return;
             }
             if (chatFile !== undefined || targetChat !== previousChat) {
@@ -4027,6 +4044,24 @@ export function getExtensionPromptMaxDepth() {
     // Clamp to 1 <= depth <= MAX_INJECTION_DEPTH
     return Math.max(Math.min(maxDepth, MAX_INJECTION_DEPTH), 1);
     */
+}
+
+/**
+ * Gets the depths, in ascending order, at which in-chat prompts can be injected.
+ * @param {Record<string, object>|null} prompts Extension prompts by key
+ * @param {Iterable<unknown>} [depths] Depths of other prompts that are injected
+ * @returns {number[]} Depths from 0 to the maximum depth
+ */
+export function getInChatInjectionDepths(prompts, depths = []) {
+    const maxDepth = getExtensionPromptMaxDepth();
+    const usedDepths = new Set(depths);
+    for (const prompt of Object.values(prompts ?? {})) {
+        if (prompt.position != extension_prompt_types.IN_CHAT || !prompt.value) continue;
+        // A prompt without a depth matches every depth.
+        if (prompt.depth === undefined) return Array.from({ length: maxDepth + 1 }, (_, depth) => depth);
+        usedDepths.add(prompt.depth);
+    }
+    return [...usedDepths].filter(depth => Number.isInteger(depth) && depth >= 0 && depth <= maxDepth).sort((a, b) => a - b);
 }
 
 /**
@@ -7204,8 +7239,7 @@ async function doChatInject(messages, isContinue) {
     let totalInsertedMessages = 0;
     messages.reverse();
 
-    const maxDepth = getExtensionPromptMaxDepth();
-    for (let i = 0; i <= maxDepth; i++) {
+    for (const i of getInChatInjectionDepths(extension_prompts)) {
         // Order of priority (most important go lower)
         const roles = [extension_prompt_roles.SYSTEM, extension_prompt_roles.USER, extension_prompt_roles.ASSISTANT];
         const names = {
