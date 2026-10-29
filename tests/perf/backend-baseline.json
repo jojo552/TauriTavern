@@ -26,12 +26,12 @@
             "instructions": 304381737
         },
         "chat/send-and-stream": {
-            "readBytes": 33295,
-            "readOps": 406,
-            "resultBytes": 765,
-            "writeBytes": 146949,
-            "writeOps": 486,
-            "instructions": 12715120
+            "readBytes": 33367,
+            "readOps": 477,
+            "resultBytes": 941,
+            "writeBytes": 147156,
+            "writeOps": 574,
+            "instructions": 16399350
         },
         "world-info/open-entry": {
             "readBytes": 179,

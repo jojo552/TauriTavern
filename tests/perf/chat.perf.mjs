@@ -1,3 +1,9 @@
+import { createHostInvokePolicies } from '../../src/tauri/main/kernel/invokes/invoke-policies.js';
+
+// The token counts made while building the prompt stay cached this long by the wall clock. The reply ends only
+// once they have expired, so the counts after generation always reach the host, however fast the machine streams.
+const tokenCountCacheMs = createHostInvokePolicies().count_openai_tokens_batch.cacheTtlMs;
+
 /** Chat: sending a message, then rendering its reply token by token. */
 export default async function chat({ page, measure }) {
     await page.evaluate(() => window.jQuery('#api_button_openai').triggerHandler('click'));
@@ -11,6 +17,7 @@ export default async function chat({ page, measure }) {
         },
         ...tokens.map(token => () => page.evaluate(text => globalThis.__perfReply.push(text), `${token} `)),
         async () => {
+            await new Promise(resolve => setTimeout(resolve, tokenCountCacheMs));
             await page.evaluate(() => globalThis.__perfReply.end());
             await page.evaluate(async () => (await import('/script.js')).waitForGenerationIdle());
         },
