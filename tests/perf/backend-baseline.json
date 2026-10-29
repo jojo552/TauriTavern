@@ -2,68 +2,68 @@
     "toolchain": "1.99.0",
     "steps": {
         "app/startup": {
-            "readBytes": 7167329,
-            "readOps": 4363,
-            "resultBytes": 507754,
-            "writeBytes": 83688,
-            "writeOps": 4312,
-            "instructions": 1358107956
+            "readBytes": 7162729,
+            "readOps": 462,
+            "resultBytes": 507768,
+            "writeBytes": 78457,
+            "writeOps": 480,
+            "instructions": 1385934518
         },
         "character/open-back": {
-            "readBytes": 102289,
-            "readOps": 399,
-            "resultBytes": 1021,
-            "writeBytes": 30254,
-            "writeOps": 431,
-            "instructions": 32088444
+            "readBytes": 101931,
+            "readOps": 37,
+            "resultBytes": 1020,
+            "writeBytes": 29876,
+            "writeOps": 67,
+            "instructions": 32413082
         },
         "character/open-heavy-card": {
-            "readBytes": 2853846,
-            "readOps": 624,
-            "resultBytes": 4143999,
-            "writeBytes": 46080,
-            "writeOps": 632,
-            "instructions": 304381737
+            "readBytes": 2853250,
+            "readOps": 49,
+            "resultBytes": 4143998,
+            "writeBytes": 45507,
+            "writeOps": 59,
+            "instructions": 311476060
         },
         "chat/send-and-stream": {
-            "readBytes": 33367,
-            "readOps": 477,
-            "resultBytes": 941,
-            "writeBytes": 147156,
-            "writeOps": 574,
-            "instructions": 16399350
+            "readBytes": 32891,
+            "readOps": 8,
+            "resultBytes": 1029,
+            "writeBytes": 146736,
+            "writeOps": 112,
+            "instructions": 18440385
         },
         "world-info/open-entry": {
-            "readBytes": 179,
-            "readOps": 64,
+            "readBytes": 124,
+            "readOps": 4,
             "resultBytes": 24,
-            "writeBytes": 76,
-            "writeOps": 62,
-            "instructions": 78807517
+            "writeBytes": 16,
+            "writeOps": 2,
+            "instructions": 80309813
         },
         "world-info/open-list": {
-            "readBytes": 749,
-            "readOps": 14,
+            "readBytes": 745,
+            "readOps": 6,
             "resultBytes": 662,
-            "writeBytes": 8,
-            "writeOps": 8,
-            "instructions": 55991
+            "writeBytes": 0,
+            "writeOps": 0,
+            "instructions": 58417
         },
         "world-info/type-10-keys": {
-            "readBytes": 447181,
-            "readOps": 136,
+            "readBytes": 447056,
+            "readOps": 6,
             "resultBytes": 110,
-            "writeBytes": 894052,
-            "writeOps": 143,
-            "instructions": 92899686
+            "writeBytes": 893922,
+            "writeOps": 13,
+            "instructions": 94477819
         },
         "world-info/type-title-10-keys": {
-            "readBytes": 447246,
-            "readOps": 81,
+            "readBytes": 447175,
+            "readOps": 6,
             "resultBytes": 86,
-            "writeBytes": 894221,
-            "writeOps": 86,
-            "instructions": 13549121
+            "writeBytes": 894146,
+            "writeOps": 11,
+            "instructions": 13641725
         }
     }
 }

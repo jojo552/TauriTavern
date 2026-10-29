@@ -31,7 +31,10 @@ function measure(root, toolchain) {
         const report = path.join(work, 'report.json');
         const replay = [path.join(inputs, 'data'), path.join(inputs, 'trace.json'), report, root];
         if (process.platform === 'linux') {
-            run('valgrind', ['--tool=callgrind', '--dump-before=tt_perf_step_boundary', '--dump-instr=no',
+            // Valgrind runs one thread at a time. Its default lock passes between threads through a pipe, a one-byte
+            // read and write that /proc/self/io counts at every switch, and how often threads switch is up to the OS
+            // scheduler. Its futex lock makes no reads or writes, so the I/O counters hold only the replay's own.
+            run('valgrind', ['--tool=callgrind', '--fair-sched=yes', '--dump-before=tt_perf_step_boundary', '--dump-instr=no',
                 `--callgrind-out-file=${path.join(work, 'callgrind')}`, binary, ...replay], { stdio: ['ignore', 'ignore', 'inherit'] });
             const { steps, boundaries } = JSON.parse(readFileSync(report, 'utf8'));
             addInstructions(steps, boundaries, work);
