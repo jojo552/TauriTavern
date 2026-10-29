@@ -6,6 +6,7 @@ import { callGenericPopup, POPUP_TYPE } from '../popup.js';
 import { t } from '../i18n.js';
 import { copyText } from '../utils.js';
 import { hostPlatform } from '../util/host-identity.js';
+import { isChromiumEngine } from '../util/browser-engine.js';
 
 /** @type {boolean | null} */
 let enabled = null;
@@ -29,7 +30,7 @@ const mountedEditors = new WeakMap();
 /**
  * Chromium hosts keep the editor in a shadow root: Blink re-checks every :has() anchor around it on each keystroke.
  * WebKit hosts keep it in the page: an edit there that replaces a selection reaching the last line pulls page
- * content into the editor.
+ * content into the editor. The browser host can run either engine, so it isolates only a recognized Chromium.
  */
 function isolatesEditor() {
     const platform = hostPlatform();
@@ -42,6 +43,8 @@ function isolatesEditor() {
         case 'ios':
         case 'linux':
             return false;
+        case 'browser':
+            return isChromiumEngine();
         default:
             throw new Error(`Unsupported host platform: ${platform}`);
     }

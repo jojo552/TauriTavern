@@ -9,6 +9,7 @@
 HTTP 宿主在模块执行前注入并冻结 `window.__TAURITAVERN_HOST__ = { platform: 'browser', kind: 'web' }`。这描述的是宿主，不是浏览器所在的操作系统；手机浏览器也不是原生 `mobile` 宿主。它不伪造 `__TAURI__` / `__TAURI_INTERNALS__`，`init.js` 不为 web 写入 `__TAURI_RUNNING__`。
 
 - 第一方身份识别统一由 [host-identity.js](../../src/scripts/util/host-identity.js) 提供。`isWebHost()` 只匹配完整 `browser/web` 身份；非项目环境缺少身份时返回 `false`，其他身份读取器缺少身份时抛错。
+- `browser` 不说明浏览器引擎。需要按引擎区分的前端行为只读 [browser-engine.js](../../src/scripts/util/browser-engine.js)：它只认 Chromium 公开的 UA Client Hints（仅安全上下文；Gecko 与所有 iOS 浏览器的 WebKit 都没有），识别不到时取各引擎都正确的行为。CodeMirror 据此只在 Chromium 中挂进 shadow root（避免 Blink 每次输入复查 `:has()`），其他引擎留在页面内（避免 WebKit shadow root 替换选区时把页面内容拉进编辑器）。
 - [bridge](../../src/tauri-bridge.js) 重导出 `isWebHost()`，在一处延迟选择宿主接口：原生/Studio ABI 或 [私有 HTTP adapter](../../src/web/host.js)。后者不安装全局 `__TAURI__`，只把实际 invoke/listen/Channel 委托给唯一 transport，DOM clipboard/opener 留在浏览器边界。调用者不再通过 `isTauri` 或版本/URL fallback 猜测后端是否存在。首次 listen/invoke 自己等待 session/SSE ready，随后共同启动链调用 `wait_for_backend_ready`，不保留独立 `initializeBridge`/`is_ready` 探测。
 - 上游 [Studio Web Host](WebHost.md) 是给嵌入预览提供 ST backend/store 映射的另一适配器，不由 `tt-server` 注入或加载。它的默认 Agent、空 MCP/Skill/extension-store 与 unsupported 列表仅描述 Studio 的范围，不替换本 HTTP 宿主的共享 Rust 服务或真实数据。
 - 两种宿主复用 `init.js → tauri-main.js → bootstrapTauriMain()`、前端兼容路由、同源窗口请求 patch、扩展运行时与 `__TAURITAVERN__` API 装配。真实平台差异留在宿主能力边界，不复制路由业务。

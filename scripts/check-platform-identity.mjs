@@ -13,6 +13,7 @@ const BACKEND_DOC = 'docs/BackendStructure.md §6.4（平台事实）';
 const BROWSER_READERS = new Set([
     'src/scripts/RossAscends-mods.js',
     'src/scripts/browser-fixes.js',
+    'src/scripts/util/browser-engine.js',
     'src/tauri/main/perf/perf-hud.js',
 ]);
 const CATEGORIES = { mobile: ['android', 'ios', 'ohos'], desktop: ['windows', 'macos', 'linux'] };
